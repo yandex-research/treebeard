@@ -1,0 +1,17 @@
+[project]
+name = "open-deep-think"
+version = "0.1.0"
+description = "Open Deep Think project"
+authors = [
+    { name = "dvmazur" }
+]
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = []
