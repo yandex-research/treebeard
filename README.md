@@ -37,7 +37,7 @@ This will install all project dependencies specified in `pyproject.toml` and loc
 
 - **Install dependencies**: `uv sync`
 - **Add a new dependency**: `uv add <package-name>`
-- **Add a dev dependency**: `uv add --dev <package-name>`
+- **Add a dev dependency**: `uv add --group dev <package-name>`
 - **Remove a dependency**: `uv remove <package-name>`
 - **Update dependencies**: `uv lock --upgrade`
 - **Run a Python script**: `uv run python script.py`
