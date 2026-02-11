@@ -43,6 +43,18 @@ This will install all project dependencies specified in `pyproject.toml` and loc
 - **Run a Python script**: `uv run python script.py`
 - **Run a command in the virtual environment**: `uv run <command>`
 
+### Development
+
+This project uses [Ruff](https://github.com/astral-sh/ruff) for linting and formatting.
+
+```bash
+# Check code with ruff
+uv run ruff check src/
+
+# Format code with ruff
+uv run ruff format src/
+```
+
 ### Why uv?
 
 uv is a fast Python package installer and resolver written in Rust. It offers:
