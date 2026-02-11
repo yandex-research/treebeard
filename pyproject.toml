@@ -18,22 +18,14 @@ line-length = 100
 target-version = "py39"
 
 [tool.ruff.lint]
-select = [
-    "E",      # pycodestyle errors
-    "W",      # pycodestyle warnings
-    "F",      # pyflakes
-    "I",      # isort
-    "B",      # flake8-bugbear
-    "C4",     # flake8-comprehensions
-    "UP",     # pyupgrade
-    "ARG",    # flake8-unused-arguments
-    "SIM",    # flake8-simplify
-    "PL",     # pylint
-]
+select = ["ALL"]
 ignore = [
-    "E501",   # line too long (handled by formatter)
-    "PLR0913", # too many arguments
-    "PLR2004", # magic value comparison
+    "ANN002", # Missing type annotation for `*args`
+    "ANN003", # Missing type annotation for `**kwargs`
+    "D107",   # Missing docstring in `__init__`
+    "FIX002", # Line contains TODO, consider resolving the issue
+    "COM812", # Conflicts with formatter
+    "ISC001", # Conflicts with formatter
 ]
 
 [tool.ruff.format]
