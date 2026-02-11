@@ -49,7 +49,7 @@ This project uses [Ruff](https://github.com/astral-sh/ruff) for linting and form
 
 ```bash
 # Check code with ruff
-uv run ruff check src/
+uv run ruff check src/ --fix
 
 # Format code with ruff
 uv run ruff format src/
