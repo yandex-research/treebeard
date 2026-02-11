@@ -1,0 +1,40 @@
+[project]
+name = "open-deep-think"
+version = "0.1.0"
+description = "Open Deep Think project"
+authors = [
+    { name = "dvmazur" }
+]
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 119
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "ANN002", # Missing type annotation for `*args`
+    "ANN003", # Missing type annotation for `**kwargs`
+    "D107",   # Missing docstring in `__init__`
+    "FIX002", # Line contains TODO, consider resolving the issue
+    "COM812", # Conflicts with formatter
+    "ISC001", # Conflicts with formatter
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8.0",
+]
