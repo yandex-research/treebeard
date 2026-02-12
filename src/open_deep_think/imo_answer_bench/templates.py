@@ -1,4 +1,23 @@
-"""Prompt templates for IMO answer bench (e.g. judge)."""
+"""Prompt templates and prompt-building helpers for IMO AnswerBench."""
+
+PROBLEM_PROMPT_PREFIX = "Please reason step by step, and put your final answer within \\boxed{}."
+"""Prefix instruction used when asking a model to solve a benchmark problem."""
+
+
+def build_problem_prompt(problem: str, prefix: str = PROBLEM_PROMPT_PREFIX) -> str:
+    r"""Build the solver prompt for a single benchmark problem.
+
+    Args:
+        problem: Raw problem statement.
+        prefix: Instruction prefix to prepend to the problem statement.
+
+    Returns:
+        A deterministic prompt string in the form:
+            ``{prefix}\\n\\n{problem}``
+
+    """
+    return f"{prefix}\n\n{problem}"
+
 
 JUDGE_PROMPT_TEMPLATE = """# System Role: Deterministic Mathematical Autograder
 You are a precise, automated grading system. Your sole function is to determine if the final answer provided in the Model Solution is mathematically equivalent to the Golden Answer. You must NOT grade the reasoning or steps, only the final result.
