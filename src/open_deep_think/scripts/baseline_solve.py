@@ -19,15 +19,14 @@ from open_deep_think.imo_answer_bench.extract import (
     extract_reasoning,
     extract_solution,
 )
+from open_deep_think.imo_answer_bench.templates import build_problem_prompt
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = logging.getLogger(__name__)
 
 
-def save_results(
-    output_path: str, task_id: int, reasoning: str, solution: str, response_data: dict[str, Any]
-) -> None:
+def save_results(output_path: str, task_id: int, reasoning: str, solution: str, response_data: dict[str, Any]) -> None:
     """Save reasoning, solution, and full response to separate files.
 
     Args:
@@ -77,7 +76,7 @@ def solve_problem(
     logger.info("Processing Task %s...", task_id)
 
     try:
-        prompt = "Please reason step by step, and put your final answer within \\boxed{}.\n\n" + problem
+        prompt = build_problem_prompt(problem)
 
         completion = single_turn_api_call(model=model, prompt=prompt, max_tokens=max_tokens)
 
