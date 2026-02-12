@@ -3,7 +3,10 @@
 import re
 
 from open_deep_think.api import single_turn_api_call
-from open_deep_think.imo_answer_bench.templates import JUDGE_PROMPT_TEMPLATE
+from open_deep_think.imo_answer_bench.templates import (
+    JUDGE_PROMPT_TEMPLATE,
+    build_judge_prompt,
+)
 
 
 def _strip_thinking_blocks(text: str) -> str:
@@ -34,9 +37,12 @@ def judge_answer(  # noqa: PLR0913
 
     """
     # Format the prompt with the problem, solution, and answer
-    prompt = judge_prompt_template.replace("{{Problem_Statement}}", problem_statement)
-    prompt = prompt.replace("{{Model_Solution}}", model_solution)
-    prompt = prompt.replace("{{Golden_Answer}}", ground_truth)
+    prompt = build_judge_prompt(
+        problem_statement=problem_statement,
+        model_solution=model_solution,
+        golden_answer=ground_truth,
+        template=judge_prompt_template,
+    )
 
     # Make API request
     try:

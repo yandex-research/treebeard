@@ -14,33 +14,37 @@ from open_deep_think.imo_answer_bench.extract import (
 
 def _completion_with_content(content: str | None) -> ChatCompletion:
     """Build a minimal ChatCompletion with the given message content."""
-    return ChatCompletion.model_validate({
-        "id": "test-id",
-        "choices": [
-            {
-                "finish_reason": "stop",
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": content,
-                },
-            }
-        ],
-        "created": 0,
-        "model": "test-model",
-        "object": "chat.completion",
-    })
+    return ChatCompletion.model_validate(
+        {
+            "id": "test-id",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": content,
+                    },
+                }
+            ],
+            "created": 0,
+            "model": "test-model",
+            "object": "chat.completion",
+        }
+    )
 
 
 def _completion_empty_choices() -> ChatCompletion:
     """Build a ChatCompletion with no choices."""
-    return ChatCompletion.model_validate({
-        "id": "test-id",
-        "choices": [],
-        "created": 0,
-        "model": "test-model",
-        "object": "chat.completion",
-    })
+    return ChatCompletion.model_validate(
+        {
+            "id": "test-id",
+            "choices": [],
+            "created": 0,
+            "model": "test-model",
+            "object": "chat.completion",
+        }
+    )
 
 
 # --- _get_message_content ---
@@ -69,15 +73,11 @@ class TestExtractReasoning:
         assert extract_reasoning(completion) == ""
 
     def test_returns_think_content_single_block(self) -> None:
-        completion = _completion_with_content(
-            "<think>Let me add 2 and 2.</think>\nSo the answer is 4."
-        )
+        completion = _completion_with_content("<think>Let me add 2 and 2.</think>\nSo the answer is 4.")
         assert extract_reasoning(completion) == "Let me add 2 and 2."
 
     def test_returns_think_content_multiline(self) -> None:
-        completion = _completion_with_content(
-            "<think>Step 1: consider x.\nStep 2: therefore y.</think>\nDone."
-        )
+        completion = _completion_with_content("<think>Step 1: consider x.\nStep 2: therefore y.</think>\nDone.")
         assert extract_reasoning(completion) == "Step 1: consider x.\nStep 2: therefore y."
 
     def test_returns_concatenated_multiple_think_blocks(self) -> None:
@@ -104,9 +104,7 @@ class TestExtractSolution:
         assert extract_solution(completion) == "The answer is 42."
 
     def test_returns_rest_after_removing_single_think_block(self) -> None:
-        completion = _completion_with_content(
-            "<think>Reasoning here.</think>\nSo the answer is 4."
-        )
+        completion = _completion_with_content("<think>Reasoning here.</think>\nSo the answer is 4.")
         assert extract_solution(completion) == "So the answer is 4."
 
     def test_returns_empty_when_only_think_blocks(self) -> None:
@@ -118,9 +116,7 @@ class TestExtractSolution:
         assert extract_solution(completion) == ""
 
     def test_strips_outer_whitespace(self) -> None:
-        completion = _completion_with_content(
-            "<think>think</think>\n  Answer line.  "
-        )
+        completion = _completion_with_content("<think>think</think>\n  Answer line.  ")
         assert extract_solution(completion) == "Answer line."
 
 
