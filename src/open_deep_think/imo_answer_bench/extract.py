@@ -21,6 +21,25 @@ def _get_message_content(completion: ChatCompletion) -> str:
         return content if content is not None else ""
 
 
+def _get_message_reasoning(completion: ChatCompletion) -> str:
+    """Get reasoning text from a ChatCompletion, or empty string.
+
+    Prefers the explicit `message.reasoning` field when available.
+    Returns empty string for missing or unsupported reasoning payloads.
+    """
+    try:
+        if not completion.choices:
+            return ""
+        reasoning = getattr(completion.choices[0].message, "reasoning", None)
+    except (KeyError, IndexError, TypeError):
+        return ""
+
+    if isinstance(reasoning, str):
+        return reasoning.strip()
+
+    return ""
+
+
 # Pattern to match <think>...</think>
 _THINK_PATTERN = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 
@@ -28,8 +47,9 @@ _THINK_PATTERN = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 def extract_reasoning(completion: ChatCompletion) -> str:
     """Extract reasoning text from a ChatCompletion.
 
-    Returns everything inside <think>...</think>
-    (all such blocks concatenated). Empty string if none.
+    Prefers `message.reasoning` when present, and otherwise falls back to
+    everything inside <think>...</think> (all such blocks concatenated).
+    Empty string if none.
 
     Args:
         completion: OpenAI SDK ChatCompletion response
@@ -38,6 +58,10 @@ def extract_reasoning(completion: ChatCompletion) -> str:
         Reasoning text or empty string
 
     """
+    direct_reasoning = _get_message_reasoning(completion)
+    if direct_reasoning:
+        return direct_reasoning
+
     text = _get_message_content(completion)
     parts = _THINK_PATTERN.findall(text)
     return "\n\n".join(p.strip() for p in parts).strip() if parts else ""

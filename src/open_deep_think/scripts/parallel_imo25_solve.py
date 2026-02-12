@@ -1,8 +1,8 @@
-"""Launch parallel task-interval runs of the IMO25 solver script.
+"""Launch parallel task-interval runs of solver scripts.
 
 This wrapper keeps orchestration intentionally simple:
 - Split `[start, end)` into `--concurrency` contiguous shards.
-- Run one `imo25_solve` process per interval.
+- Run one solver process per shard.
 - Start all shard commands together.
 
 Each shard gets a unique `--run_name` suffix to avoid output collisions.
@@ -85,12 +85,15 @@ def add_optional_arg(command: list[str], flag: str, value: str | float | None) -
 
 
 def build_child_command(args: argparse.Namespace, shard: Shard, base_run_name: str) -> list[str]:
-    """Build the `imo25_solve` command for one shard."""
+    """Build the child solver command for one shard."""
     run_name = f"{base_run_name}_shard_{shard.index:03d}"
+    module_name = (
+        "open_deep_think.scripts.imo25_solve" if args.script == "imo25" else "open_deep_think.scripts.baseline_solve"
+    )
     command = [
         sys.executable,
         "-m",
-        "open_deep_think.scripts.imo25_solve",
+        module_name,
         "--start",
         str(shard.start),
         "--end",
@@ -99,26 +102,29 @@ def build_child_command(args: argparse.Namespace, shard: Shard, base_run_name: s
         args.model,
         "--output_path",
         args.output_path,
-        "--run_name",
-        run_name,
     ]
 
-    add_optional_arg(command, "--verifier_model", args.verifier_model)
-    add_optional_arg(command, "--classifier_model", args.classifier_model)
-    add_optional_arg(command, "--solver_max_tokens", args.solver_max_tokens)
-    add_optional_arg(command, "--verifier_max_tokens", args.verifier_max_tokens)
-    add_optional_arg(command, "--classifier_max_tokens", args.classifier_max_tokens)
-    add_optional_arg(command, "--max_runs", args.max_runs)
-    add_optional_arg(command, "--max_iterations", args.max_iterations)
-    add_optional_arg(command, "--required_consecutive_passes", args.required_consecutive_passes)
-    add_optional_arg(command, "--max_consecutive_failures", args.max_consecutive_failures)
-    add_optional_arg(command, "--temperature", args.temperature)
-    add_optional_arg(command, "--top_p", args.top_p)
-    add_optional_arg(command, "--dataset_name", args.dataset_name)
-    add_optional_arg(command, "--dataset_split", args.dataset_split)
-
-    for other_prompt in args.other_prompt:
-        command.extend(["--other_prompt", other_prompt])
+    if args.script == "imo25":
+        command.extend(["--run_name", run_name])
+        add_optional_arg(command, "--verifier_model", args.verifier_model)
+        add_optional_arg(command, "--classifier_model", args.classifier_model)
+        add_optional_arg(command, "--solver_max_tokens", args.solver_max_tokens)
+        add_optional_arg(command, "--verifier_max_tokens", args.verifier_max_tokens)
+        add_optional_arg(command, "--classifier_max_tokens", args.classifier_max_tokens)
+        add_optional_arg(command, "--max_runs", args.max_runs)
+        add_optional_arg(command, "--max_iterations", args.max_iterations)
+        add_optional_arg(command, "--required_consecutive_passes", args.required_consecutive_passes)
+        add_optional_arg(command, "--max_consecutive_failures", args.max_consecutive_failures)
+        add_optional_arg(command, "--temperature", args.temperature)
+        add_optional_arg(command, "--top_p", args.top_p)
+        add_optional_arg(command, "--dataset_name", args.dataset_name)
+        add_optional_arg(command, "--dataset_split", args.dataset_split)
+        for other_prompt in args.other_prompt:
+            command.extend(["--other_prompt", other_prompt])
+    else:
+        add_optional_arg(command, "--max_tokens", args.baseline_max_tokens)
+        add_optional_arg(command, "--temperature", args.temperature)
+        add_optional_arg(command, "--top_p", args.top_p)
     return command
 
 
@@ -149,11 +155,17 @@ def run_shard(args: argparse.Namespace, shard: Shard, base_run_name: str, launch
 
 def parse_args() -> argparse.Namespace:
     """Parse launcher and child-forwarded options."""
-    parser = argparse.ArgumentParser(description="Run parallel task-interval IMO25 solver shards")
+    parser = argparse.ArgumentParser(description="Run parallel task-interval solver shards")
     parser.add_argument("--start", type=int, required=True, help="Starting task index (inclusive)")
     parser.add_argument("--end", type=int, required=True, help="Ending task index (exclusive)")
     parser.add_argument("--model", type=str, required=True, help="Solver model name")
     parser.add_argument("--output_path", type=str, required=True, help="Base output directory for child runs")
+    parser.add_argument(
+        "--script",
+        choices=["imo25", "baseline"],
+        default="imo25",
+        help="Child script to run in parallel shards",
+    )
 
     parser.add_argument("--concurrency", type=int, default=1, help="Number of parallel shards/processes")
     parser.add_argument("--run_name", type=str, help="Base run name for all shards")
@@ -166,7 +178,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--dry_run", action="store_true", help="Print shard commands without executing them")
 
-    # Forwarded solver arguments.
+    # Forwarded imo25 arguments.
     parser.add_argument("--verifier_model", type=str)
     parser.add_argument("--classifier_model", type=str)
     parser.add_argument("--solver_max_tokens", type=int)
@@ -186,6 +198,8 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help="Additional user prompt forwarded to child solver. Repeat for multiple prompts.",
     )
+    # Forwarded baseline arguments.
+    parser.add_argument("--baseline_max_tokens", type=int, help="Forwarded as --max_tokens for baseline_solve")
     return parser.parse_args()
 
 
@@ -211,7 +225,7 @@ def main() -> int:
     launcher_log_dir = (
         Path(args.launcher_log_dir)
         if args.launcher_log_dir
-        else Path(args.output_path) / "imo25_parallel_launcher" / base_run_name
+        else Path(args.output_path) / f"{args.script}_parallel_launcher" / base_run_name
     )
     launcher_log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -222,7 +236,7 @@ def main() -> int:
         LOGGER.info("No shards to run.")
         return 0
 
-    LOGGER.info("Shards: %s (requested concurrency: %s)", len(shards), args.concurrency)
+    LOGGER.info("Script: %s | shards: %s (requested concurrency: %s)", args.script, len(shards), args.concurrency)
     for shard in shards:
         LOGGER.info("Shard %03d interval [%s, %s)", shard.index, shard.start, shard.end)
 

@@ -4,6 +4,8 @@ This script processes problems from a dataset, sends them to an API for solving,
 and stores the results in separate files for reasoning, solution, and full response.
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import logging
@@ -56,12 +58,14 @@ def save_results(output_path: str, task_id: int, reasoning: str, solution: str, 
         json.dump(response_data, f, indent=2, ensure_ascii=False)
 
 
-def solve_problem(
+def solve_problem(  # noqa: PLR0913
     problem: str,
     model: str,
     task_id: int,
     output_path: str,
     max_tokens: int,
+    temperature: float | None,
+    top_p: float | None,
 ) -> None:
     """Solve a single problem and save results.
 
@@ -71,6 +75,8 @@ def solve_problem(
         task_id: Task identifier
         output_path: Base directory for output files
         max_tokens: Maximum tokens for API response
+        temperature: Sampling temperature for API response
+        top_p: Nucleus sampling parameter for API response
 
     """
     logger.info("Processing Task %s...", task_id)
@@ -78,7 +84,13 @@ def solve_problem(
     try:
         prompt = build_problem_prompt(problem)
 
-        completion = single_turn_api_call(model=model, prompt=prompt, max_tokens=max_tokens)
+        completion = single_turn_api_call(
+            model=model,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+        )
 
         reasoning = extract_reasoning(completion)
         solution = extract_solution(completion)
@@ -101,6 +113,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--end", type=int, help="Ending task index (exclusive)")
     parser.add_argument("--model", type=str, help="Model identifier for API calls (e.g., 'deepseek/deepseek-v3.2')")
     parser.add_argument("--max_tokens", type=int, help="Max tokens for API call")
+    parser.add_argument("--temperature", type=float, help="Sampling temperature")
+    parser.add_argument("--top_p", type=float, help="Nucleus sampling top_p")
     parser.add_argument("--output_path", type=str, help="Output directory path")
     return parser.parse_args()
 
@@ -136,7 +150,13 @@ def main() -> None:
     for task_id in range(args.start, args.end):
         problem = dataset[task_id]["Problem"]
         solve_problem(
-            problem=problem, model=args.model, task_id=task_id, output_path=output_path, max_tokens=args.max_tokens
+            problem=problem,
+            model=args.model,
+            task_id=task_id,
+            output_path=output_path,
+            max_tokens=args.max_tokens,
+            temperature=args.temperature,
+            top_p=args.top_p,
         )
 
     logger.info("All tasks completed.")

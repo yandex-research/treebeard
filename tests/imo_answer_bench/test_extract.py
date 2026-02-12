@@ -12,8 +12,15 @@ from open_deep_think.imo_answer_bench.extract import (
 )
 
 
-def _completion_with_content(content: str | None) -> ChatCompletion:
-    """Build a minimal ChatCompletion with the given message content."""
+def _completion_with_content(content: str | None, reasoning: str | None = None) -> ChatCompletion:
+    """Build a minimal ChatCompletion with message content and optional reasoning."""
+    message: dict[str, str | None] = {
+        "role": "assistant",
+        "content": content,
+    }
+    if reasoning is not None:
+        message["reasoning"] = reasoning
+
     return ChatCompletion.model_validate(
         {
             "id": "test-id",
@@ -21,10 +28,7 @@ def _completion_with_content(content: str | None) -> ChatCompletion:
                 {
                     "finish_reason": "stop",
                     "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": content,
-                    },
+                    "message": message,
                 }
             ],
             "created": 0,
@@ -68,6 +72,17 @@ class TestGetMessageContent:
 
 
 class TestExtractReasoning:
+    def test_prefers_message_reasoning_when_present(self) -> None:
+        completion = _completion_with_content(
+            "<think>fallback reasoning</think>\nAnswer.",
+            reasoning="primary reasoning",
+        )
+        assert extract_reasoning(completion) == "primary reasoning"
+
+    def test_falls_back_to_think_blocks_when_reasoning_missing(self) -> None:
+        completion = _completion_with_content("<think>fallback reasoning</think>\nAnswer.")
+        assert extract_reasoning(completion) == "fallback reasoning"
+
     def test_returns_empty_when_no_think_block(self) -> None:
         completion = _completion_with_content("Just the answer: 42.")
         assert extract_reasoning(completion) == ""

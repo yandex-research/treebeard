@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from open_deep_think.imo_answer_bench.templates import (
-    IMO25_STEP1_SYSTEM_PROMPT,
     PROBLEM_PROMPT_PREFIX,
     build_judge_prompt,
     build_problem_prompt,

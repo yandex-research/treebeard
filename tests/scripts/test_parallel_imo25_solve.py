@@ -14,6 +14,7 @@ from open_deep_think.scripts.parallel_imo25_solve import (
 def _base_args() -> argparse.Namespace:
     """Build a minimal namespace for command construction tests."""
     return argparse.Namespace(
+        script="imo25",
         model="provider/model",
         output_path="./logs",
         verifier_model=None,
@@ -30,6 +31,7 @@ def _base_args() -> argparse.Namespace:
         dataset_name=None,
         dataset_split=None,
         other_prompt=[],
+        baseline_max_tokens=None,
     )
 
 
@@ -80,3 +82,22 @@ def test_build_child_command_includes_optional_forwarded_args() -> None:
     assert "--temperature" in command
     assert "0.2" in command
     assert command.count("--other_prompt") == expected_other_prompt_count
+
+
+def test_build_child_command_baseline_uses_baseline_module_and_max_tokens() -> None:
+    args = _base_args()
+    args.script = "baseline"
+    args.baseline_max_tokens = 4096
+    args.temperature = 1.0
+    args.top_p = 0.95
+
+    command = build_child_command(args=args, shard=Shard(index=1, start=2, end=5), base_run_name="r")
+
+    assert "open_deep_think.scripts.baseline_solve" in command
+    assert "--max_tokens" in command
+    assert "4096" in command
+    assert "--temperature" in command
+    assert "1.0" in command
+    assert "--top_p" in command
+    assert "0.95" in command
+    assert "--run_name" not in command
