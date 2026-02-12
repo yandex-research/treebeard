@@ -2,7 +2,7 @@
 - Write good, readable and reusable code
 - Write docstrings
 - Write good tests
-- Always run tests and ruff after changes and fix all issues
+- Always run tests and ruff at the end and fix all issues
 
 ```bash
 # Check code with ruff

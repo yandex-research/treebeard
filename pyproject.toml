@@ -31,7 +31,7 @@ ignore = [
     "COM812", # Conflicts with formatter
     "ISC001", # Conflicts with formatter
 ]
-per-file-ignores = { "tests/**/*.py" = ["D100", "D101", "D102", "D103", "D104", "S101"] }
+per-file-ignores = { "src/open_deep_think/imo_answer_bench/templates.py" = ["E501"], "tests/**/*.py" = ["D100", "D101", "D102", "D103", "D104", "S101"] }
 
 [tool.ruff.format]
 quote-style = "double"

@@ -6,6 +6,11 @@ from open_deep_think.api import single_turn_api_call
 from open_deep_think.imo_answer_bench.templates import JUDGE_PROMPT_TEMPLATE
 
 
+def _strip_thinking_blocks(text: str) -> str:
+    """Remove all <thinking>...</thinking> blocks from text, including tags."""
+    return re.sub(r"<thinking>.*?</thinking>", "", text, flags=re.DOTALL)
+
+
 def judge_answer(  # noqa: PLR0913
     problem_statement: str,
     model_solution: str,
@@ -47,11 +52,13 @@ def judge_answer(  # noqa: PLR0913
         message = completion.choices[0].message
         response_text = message.content if message.content is not None else ""
 
-        # Parse the judge's response - expecting \boxed{Correct} or \boxed{Incorrect}
-        boxed_match = re.search(r"\\boxed\{([^}]+)\}", response_text)
+        response_text = _strip_thinking_blocks(response_text)
 
-        if boxed_match:
-            verdict = boxed_match.group(1).strip().lower()
+        # Parse the judge's response - expecting \boxed{Correct} or \boxed{Incorrect}
+        boxed_matches = re.findall(r"\\boxed\{([^}]+)\}", response_text)
+
+        if boxed_matches:
+            verdict = boxed_matches[-1].strip().lower()
             return verdict == "correct"
 
         # Fallback: check if "correct" appears in the response
