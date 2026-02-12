@@ -3,6 +3,7 @@
 This script evaluates model solutions against the IMO AnswerBench dataset.
 It uses an API-based judge model (Gemini 3 Flash) to compare model answers with ground truth.
 """
+
 from __future__ import annotations
 
 import argparse

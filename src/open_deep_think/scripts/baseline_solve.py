@@ -25,9 +25,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logger = logging.getLogger(__name__)
 
 
-def save_results(
-    output_path: str, task_id: int, reasoning: str, solution: str, response_data: dict[str, Any]
-) -> None:
+def save_results(output_path: str, task_id: int, reasoning: str, solution: str, response_data: dict[str, Any]) -> None:
     """Save reasoning, solution, and full response to separate files.
 
     Args:
