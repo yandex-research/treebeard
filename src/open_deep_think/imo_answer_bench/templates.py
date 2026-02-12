@@ -204,7 +204,4 @@ Your task is to act as an IMO grader. Now, generate the **summary** and the **st
 """
 
 
-IMO25_BINARY_CORRECTNESS_PROMPT = (
-    'Response in "yes" or "no". Is the following statement saying the solution is correct, or does not contain critical error or a major justification gap?'
-)
-
+IMO25_BINARY_CORRECTNESS_PROMPT = 'Response in "yes" or "no". Is the following statement saying the solution is correct, or does not contain critical error or a major justification gap?'
