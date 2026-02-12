@@ -58,6 +58,8 @@ def judge_answer(  # noqa: PLR0913
         message = completion.choices[0].message
         response_text = message.content if message.content is not None else ""
 
+        print(response_text)
+
         response_text = _strip_thinking_blocks(response_text)
 
         # Parse the judge's response - expecting \boxed{Correct} or \boxed{Incorrect}

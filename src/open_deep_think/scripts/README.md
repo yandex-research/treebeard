@@ -30,7 +30,7 @@ Run the IMO25 verification-and-refinement pipeline reproduction:
 python -m open_deep_think.scripts.imo25_solve \
   --start 0 --end 1 \
   --model moonshotai/kimi-k2-thinking \
-  --output_path ../data
+  --output_path logs/
 ```
 
 ## Output Format
@@ -49,7 +49,7 @@ Then evaluate:
 
 ```bash
 python -m open_deep_think.scripts.evaluate \
-  --solutions_dir ../data/imo25/kimi-k2-thinking/<run_name> \
-  --judge_model google/gemini-3-flash-preview \
+  --solutions_dir logs/imo25/kimi-k2-thinking/<run_name> \
+  --judge_model models/gemini-3-flash-preview \
   --max_tokens 4096
 ```
