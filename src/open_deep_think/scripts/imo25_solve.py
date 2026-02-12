@@ -591,7 +591,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--classifier_model", type=str, help="Binary checker model name (default: verifier model)")
     parser.add_argument("--solver_max_tokens", type=int, default=32768, help="Maximum solver output tokens")
     parser.add_argument("--verifier_max_tokens", type=int, default=32768, help="Maximum verifier output tokens")
-    parser.add_argument("--classifier_max_tokens", type=int, default=64, help="Maximum checker output tokens")
+    parser.add_argument("--classifier_max_tokens", type=int, default=2048, help="Maximum checker output tokens")
     parser.add_argument("--max_runs", type=int, default=10, help="Number of independent retries per task")
     parser.add_argument("--max_iterations", type=int, default=30, help="Maximum refinement iterations per run")
     parser.add_argument(
