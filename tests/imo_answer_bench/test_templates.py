@@ -7,7 +7,6 @@ from open_deep_think.imo_answer_bench.templates import (
     PROBLEM_PROMPT_PREFIX,
     build_judge_prompt,
     build_problem_prompt,
-    step1_prompt,
 )
 
 
@@ -40,8 +39,3 @@ def test_build_judge_prompt_replaces_all_placeholders() -> None:
     )
 
     assert prompt == "P=Find x.|S=\\boxed{3}|G=3"
-
-
-def test_imo25_prompt_alias_keeps_backward_compatibility() -> None:
-    """Legacy lowercase prompt aliases should match uppercase constants."""
-    assert step1_prompt == IMO25_STEP1_SYSTEM_PROMPT

@@ -33,6 +33,16 @@ python -m open_deep_think.scripts.imo25_solve \
   --output_path logs/
 ```
 
+Run parallel shards split by concurrency:
+
+```bash
+python -m open_deep_think.scripts.parallel_imo25_solve \
+  --start 0 --end 10 \
+  --concurrency 3 \
+  --model moonshotai/kimi-k2-thinking \
+  --output_path logs/
+```
+
 ## Output Format
 
 Both solvers emit `Task_{task_id}_solution.txt`, which is what `evaluate.py` reads.
