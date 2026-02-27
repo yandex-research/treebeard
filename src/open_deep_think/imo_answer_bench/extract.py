@@ -44,6 +44,25 @@ def _get_message_reasoning(completion: ChatCompletion) -> str:
 _THINK_PATTERN = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 
 
+def _normalize_missing_opening_think(text: str) -> str:
+    """Normalize text when the first ``<think>`` token is missing.
+
+    Some LLM servers may omit the very first ``<think>`` token while still
+    emitting the closing ``</think>`` token. When a closing token appears
+    before any opening token, prepend ``<think>`` so standard extraction
+    logic can work unchanged.
+    """
+    close_idx = text.find("</think>")
+    if close_idx < 0:
+        return text
+
+    first_open_idx = text.find("<think>")
+    if first_open_idx != -1 and first_open_idx < close_idx:
+        return text
+
+    return f"<think>{text}"
+
+
 def extract_reasoning(completion: ChatCompletion) -> str:
     """Extract reasoning text from a ChatCompletion.
 
@@ -62,7 +81,7 @@ def extract_reasoning(completion: ChatCompletion) -> str:
     if direct_reasoning:
         return direct_reasoning
 
-    text = _get_message_content(completion)
+    text = _normalize_missing_opening_think(_get_message_content(completion))
     parts = _THINK_PATTERN.findall(text)
     return "\n\n".join(p.strip() for p in parts).strip() if parts else ""
 
@@ -80,7 +99,7 @@ def extract_solution(completion: ChatCompletion) -> str:
         Solution text (no think blocks) or empty string
 
     """
-    text = _get_message_content(completion)
+    text = _normalize_missing_opening_think(_get_message_content(completion))
     rest = _THINK_PATTERN.sub("", text)
     return rest.strip() if rest else ""
 

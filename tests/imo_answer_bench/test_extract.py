@@ -109,6 +109,12 @@ class TestExtractReasoning:
         completion = _completion_with_content("<think>  inner text  \n </think>\nAnswer.")
         assert extract_reasoning(completion) == "inner text"
 
+    def test_extracts_reasoning_when_opening_think_token_is_missing(self) -> None:
+        completion = _completion_with_content(
+            "First, derive the invariant.\nThen evaluate at n=1.</think>\nSo the answer is 17."
+        )
+        assert extract_reasoning(completion) == "First, derive the invariant.\nThen evaluate at n=1."
+
 
 # --- extract_solution ---
 
@@ -133,6 +139,12 @@ class TestExtractSolution:
     def test_strips_outer_whitespace(self) -> None:
         completion = _completion_with_content("<think>think</think>\n  Answer line.  ")
         assert extract_solution(completion) == "Answer line."
+
+    def test_extracts_solution_when_opening_think_token_is_missing(self) -> None:
+        completion = _completion_with_content(
+            "I should check parity first.\nThen simplify.</think>\nFinal: \\boxed{24}"
+        )
+        assert extract_solution(completion) == r"Final: \boxed{24}"
 
 
 # --- extract_boxed_answer ---
