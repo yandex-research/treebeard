@@ -120,11 +120,11 @@ def evaluate_solutions(
         model_answer = extract_boxed_answer(solution_text)
         result_entry["model_answer"] = model_answer
 
-        if model_answer is None:
-            results["no_boxed_answer"] += 1
-            result_entry["status"] = "no_boxed_answer"
-            results["details"].append(result_entry)
-            continue
+        # if model_answer is None:
+        #     results["no_boxed_answer"] += 1
+        #     result_entry["status"] = "no_boxed_answer"
+        #     results["details"].append(result_entry)
+        #     continue
 
         # Judge the answer using the full solution text
         results["total"] += 1
