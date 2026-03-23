@@ -121,10 +121,10 @@ def evaluate_solutions(
         result_entry["model_answer"] = model_answer
 
         # if model_answer is None:
-        #     results["no_boxed_answer"] += 1
-        #     result_entry["status"] = "no_boxed_answer"
-        #     results["details"].append(result_entry)
-        #     continue
+        #     results["no_boxed_answer"] += 1  # noqa: ERA001
+        #     result_entry["status"] = "no_boxed_answer"  # noqa: ERA001
+        #     results["details"].append(result_entry)  # noqa: ERA001
+        #     continue  # noqa: ERA001
 
         # Judge the answer using the full solution text
         results["total"] += 1
