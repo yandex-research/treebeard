@@ -32,6 +32,13 @@ def _base_args() -> argparse.Namespace:
         dataset_split=None,
         other_prompt=[],
         baseline_max_tokens=None,
+        # simple_tournament-specific
+        judge_model=None,
+        judge_max_tokens=None,
+        num_solutions=None,
+        # tournament_merge-specific
+        merger_model=None,
+        merger_max_tokens=None,
     )
 
 
@@ -101,3 +108,94 @@ def test_build_child_command_baseline_uses_baseline_module_and_max_tokens() -> N
     assert "--top_p" in command
     assert "0.95" in command
     assert "--run_name" not in command
+
+
+def test_build_child_command_tournament_uses_tournament_module_and_args() -> None:
+    args = _base_args()
+    args.script = "simple_tournament"
+    args.judge_model = "judge/model"
+    args.judge_max_tokens = 16
+    args.num_solutions = 4
+    args.verifier_model = "verifier/model"
+    args.temperature = 0.7
+
+    command = build_child_command(args=args, shard=Shard(index=0, start=0, end=2), base_run_name="run")
+
+    assert "open_deep_think.scripts.simple_tournament" in command
+    assert "--run_name" in command
+    assert "run_shard_000" in command
+    assert "--judge_model" in command
+    assert "judge/model" in command
+    assert "--judge_max_tokens" in command
+    assert "16" in command
+    assert "--num_solutions" in command
+    assert "4" in command
+    assert "--verifier_model" in command
+    assert "verifier/model" in command
+    assert "--temperature" in command
+    assert "0.7" in command
+    # imo25-only args must not appear
+    assert "--max_runs" not in command
+    assert "--max_iterations" not in command
+
+
+def test_build_child_command_tournament_merge_uses_tournament_merge_module_and_args() -> None:
+    args = _base_args()
+    args.script = "tournament_merge"
+    args.merger_model = "merger/model"
+    args.merger_max_tokens = 32000
+    args.num_solutions = 4
+    args.verifier_model = "verifier/model"
+    args.temperature = 0.7
+
+    command = build_child_command(args=args, shard=Shard(index=0, start=0, end=2), base_run_name="run")
+
+    assert "open_deep_think.scripts.tournament_merge" in command
+    assert "--run_name" in command
+    assert "run_shard_000" in command
+    assert "--merger_model" in command
+    assert "merger/model" in command
+    assert "--merger_max_tokens" in command
+    assert "32000" in command
+    assert "--num_solutions" in command
+    assert "4" in command
+    assert "--verifier_model" in command
+    assert "verifier/model" in command
+    assert "--temperature" in command
+    assert "0.7" in command
+    # simple_tournament-only and imo25-only args must not appear
+    assert "--judge_model" not in command
+    assert "--judge_max_tokens" not in command
+    assert "--max_runs" not in command
+    assert "--max_iterations" not in command
+
+
+def test_build_child_command_tournament_merge_improve_uses_correct_module_and_args() -> None:
+    args = _base_args()
+    args.script = "tournament_merge_improve"
+    args.merger_model = "merger/model"
+    args.merger_max_tokens = 32000
+    args.num_solutions = 4
+    args.verifier_model = "verifier/model"
+    args.temperature = 0.7
+
+    command = build_child_command(args=args, shard=Shard(index=0, start=0, end=2), base_run_name="run")
+
+    assert "open_deep_think.scripts.tournament_merge_improve" in command
+    assert "--run_name" in command
+    assert "run_shard_000" in command
+    assert "--merger_model" in command
+    assert "merger/model" in command
+    assert "--merger_max_tokens" in command
+    assert "32000" in command
+    assert "--num_solutions" in command
+    assert "4" in command
+    assert "--verifier_model" in command
+    assert "verifier/model" in command
+    assert "--temperature" in command
+    assert "0.7" in command
+    # simple_tournament-only and imo25-only args must not appear
+    assert "--judge_model" not in command
+    assert "--judge_max_tokens" not in command
+    assert "--max_runs" not in command
+    assert "--max_iterations" not in command

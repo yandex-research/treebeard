@@ -205,3 +205,185 @@ Your task is to act as an IMO grader. Now, generate the **summary** and the **st
 
 
 IMO25_BINARY_CORRECTNESS_PROMPT = 'Response in "yes" or "no". Is the following statement saying the solution is correct, or does not contain critical error or a major justification gap?'
+
+
+###### Tournament prompts #######
+
+
+TOURNAMENT_COMPARISON_SYSTEM_PROMPT = """
+You are an expert mathematician acting as a judge in a mathematical solution tournament.
+You will be given a problem and two candidate solutions, each accompanied by a verification report.
+Your task is to select the better solution.
+
+### Judging Criteria (in order of priority) ###
+
+1. **Correctness:** Prefer the solution whose verification report indicates it is correct or has fewer / less severe issues (Critical Errors outweigh Justification Gaps).
+2. **Completeness:** If correctness is equal, prefer the solution that is more complete (solves the full problem rather than a partial result).
+3. **Rigor and Clarity:** If both criteria above are equal, prefer the solution that is more rigorously argued and clearly presented.
+
+### Output Format ###
+
+Respond with **only** the digit `1` or `2` — nothing else.
+- Output `1` if Solution 1 is better.
+- Output `2` if Solution 2 is better.
+If the solutions are equally good, pick either one.
+"""
+
+TOURNAMENT_COMPARISON_PROMPT_TEMPLATE = """
+======================================================================
+### Problem ###
+
+{problem}
+
+======================================================================
+### Solution 1 ###
+
+{solution_1}
+
+======================================================================
+### Verification Report for Solution 1 ###
+
+{verification_1}
+
+======================================================================
+### Solution 2 ###
+
+{solution_2}
+
+======================================================================
+### Verification Report for Solution 2 ###
+
+{verification_2}
+
+======================================================================
+
+Based on the problem, both solutions, and their verification reports, which solution is better?
+Respond with only `1` or `2`.
+"""
+
+
+def build_tournament_comparison_prompt(
+    problem: str,
+    solution_1: str,
+    verification_1: str,
+    solution_2: str,
+    verification_2: str,
+) -> str:
+    """Build the comparison prompt for a tournament match between two solutions.
+
+    Args:
+        problem: The original problem statement.
+        solution_1: Full text of the first candidate solution.
+        verification_1: Verifier output for the first solution.
+        solution_2: Full text of the second candidate solution.
+        verification_2: Verifier output for the second solution.
+
+    Returns:
+        Rendered prompt string for the judge model.
+
+    """
+    return TOURNAMENT_COMPARISON_PROMPT_TEMPLATE.format(
+        problem=problem,
+        solution_1=solution_1,
+        verification_1=verification_1,
+        solution_2=solution_2,
+        verification_2=verification_2,
+    )
+
+
+###### Tournament-merge prompts #######
+
+
+TOURNAMENT_MERGE_SYSTEM_PROMPT = """
+You are an expert mathematician tasked with synthesising two candidate solutions to a hard mathematical problem into a single, improved solution.
+
+You will be given:
+- The original problem statement.
+- Two candidate solutions (Solution 1 and Solution 2).
+- A verification report for each solution, produced by an independent expert grader.
+
+### Your Goal ###
+
+Produce **one** merged solution that is strictly better than either input.  Use the following strategy:
+
+1. **Diagnose each solution.** Read the verification reports carefully to understand which parts of each solution are correct, which contain Critical Errors, and which have Justification Gaps.
+2. **Combine the best parts.** Take the correct, well-justified steps from each solution.  If both solutions handle a sub-problem correctly, prefer the clearer or more rigorous version.
+3. **Repair identified issues.** Where a verification report flags a Critical Error or Justification Gap, do not copy that flawed reasoning.  Instead, either use the other solution's correct argument for that step, or construct a new, rigorous argument from scratch.
+4. **Maintain full rigour.** Every step in the merged solution must be logically sound and clearly explained.  Do not introduce new gaps or errors.
+
+### Output Format ###
+
+Your merged solution MUST follow the same structure as the input solutions:
+
+**1. Summary**
+- **Verdict:** State whether the merged solution is complete or partial.
+- **Method Sketch:** High-level outline of the argument, including key lemmas and their precise statements.
+
+**2. Detailed Solution**
+Full, step-by-step proof.  Each step must be logically justified.  Do not include internal commentary, alternative approaches, or failed attempts.
+
+### Self-Correction Instruction ###
+
+Before finalising your output, review the merged solution to ensure it is clean, rigorous, and free of the errors identified in the verification reports.
+"""
+
+TOURNAMENT_MERGE_PROMPT_TEMPLATE = """
+======================================================================
+### Problem ###
+
+{problem}
+
+======================================================================
+### Solution 1 ###
+
+{solution_1}
+
+======================================================================
+### Verification Report for Solution 1 ###
+
+{verification_1}
+
+======================================================================
+### Solution 2 ###
+
+{solution_2}
+
+======================================================================
+### Verification Report for Solution 2 ###
+
+{verification_2}
+
+======================================================================
+
+Based on the problem, both solutions, and their verification reports, produce a single merged solution that combines the best parts of each and repairs any identified errors or gaps.
+Your merged solution must follow the output format specified in the system prompt.
+"""
+
+
+def build_tournament_merge_prompt(
+    problem: str,
+    solution_1: str,
+    verification_1: str,
+    solution_2: str,
+    verification_2: str,
+) -> str:
+    """Build the merge prompt for a tournament-merge match between two solutions.
+
+    Args:
+        problem: The original problem statement.
+        solution_1: Full text of the first candidate solution.
+        verification_1: Verifier output for the first solution.
+        solution_2: Full text of the second candidate solution.
+        verification_2: Verifier output for the second solution.
+
+    Returns:
+        Rendered prompt string for the merger model.
+
+    """
+    return TOURNAMENT_MERGE_PROMPT_TEMPLATE.format(
+        problem=problem,
+        solution_1=solution_1,
+        verification_1=verification_1,
+        solution_2=solution_2,
+        verification_2=verification_2,
+    )

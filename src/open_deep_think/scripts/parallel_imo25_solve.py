@@ -84,12 +84,33 @@ def add_optional_arg(command: list[str], flag: str, value: str | float | None) -
     command.extend([flag, str(value)])
 
 
+def _append_common_tournament_args(command: list[str], args: argparse.Namespace) -> None:
+    """Append shared tournament args (verifier, classifier, num_solutions, sampling, dataset)."""
+    add_optional_arg(command, "--verifier_model", args.verifier_model)
+    add_optional_arg(command, "--classifier_model", args.classifier_model)
+    add_optional_arg(command, "--solver_max_tokens", args.solver_max_tokens)
+    add_optional_arg(command, "--verifier_max_tokens", args.verifier_max_tokens)
+    add_optional_arg(command, "--classifier_max_tokens", args.classifier_max_tokens)
+    add_optional_arg(command, "--num_solutions", args.num_solutions)
+    add_optional_arg(command, "--temperature", args.temperature)
+    add_optional_arg(command, "--top_p", args.top_p)
+    add_optional_arg(command, "--dataset_name", args.dataset_name)
+    add_optional_arg(command, "--dataset_split", args.dataset_split)
+    for other_prompt in args.other_prompt:
+        command.extend(["--other_prompt", other_prompt])
+
+
 def build_child_command(args: argparse.Namespace, shard: Shard, base_run_name: str) -> list[str]:
     """Build the child solver command for one shard."""
     run_name = f"{base_run_name}_shard_{shard.index:03d}"
-    module_name = (
-        "open_deep_think.scripts.imo25_solve" if args.script == "imo25" else "open_deep_think.scripts.baseline_solve"
-    )
+    module_map = {
+        "imo25": "open_deep_think.scripts.imo25_solve",
+        "simple_tournament": "open_deep_think.scripts.simple_tournament",
+        "tournament_merge": "open_deep_think.scripts.tournament_merge",
+        "tournament_merge_improve": "open_deep_think.scripts.tournament_merge_improve",
+        "baseline": "open_deep_think.scripts.baseline_solve",
+    }
+    module_name = module_map[args.script]
     command = [
         sys.executable,
         "-m",
@@ -121,6 +142,16 @@ def build_child_command(args: argparse.Namespace, shard: Shard, base_run_name: s
         add_optional_arg(command, "--dataset_split", args.dataset_split)
         for other_prompt in args.other_prompt:
             command.extend(["--other_prompt", other_prompt])
+    elif args.script == "simple_tournament":
+        command.extend(["--run_name", run_name])
+        _append_common_tournament_args(command, args)
+        add_optional_arg(command, "--judge_model", args.judge_model)
+        add_optional_arg(command, "--judge_max_tokens", args.judge_max_tokens)
+    elif args.script in {"tournament_merge", "tournament_merge_improve"}:
+        command.extend(["--run_name", run_name])
+        _append_common_tournament_args(command, args)
+        add_optional_arg(command, "--merger_model", args.merger_model)
+        add_optional_arg(command, "--merger_max_tokens", args.merger_max_tokens)
     else:
         add_optional_arg(command, "--max_tokens", args.baseline_max_tokens)
         add_optional_arg(command, "--temperature", args.temperature)
@@ -162,7 +193,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output_path", type=str, required=True, help="Base output directory for child runs")
     parser.add_argument(
         "--script",
-        choices=["imo25", "baseline"],
+        choices=["imo25", "simple_tournament", "tournament_merge", "tournament_merge_improve", "baseline"],
         default="imo25",
         help="Child script to run in parallel shards",
     )
@@ -198,6 +229,13 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help="Additional user prompt forwarded to child solver. Repeat for multiple prompts.",
     )
+    # Forwarded simple_tournament arguments.
+    parser.add_argument("--judge_model", type=str, help="Forwarded as --judge_model for simple_tournament")
+    parser.add_argument("--judge_max_tokens", type=int, help="Forwarded as --judge_max_tokens for simple_tournament")
+    parser.add_argument("--num_solutions", type=int, help="Forwarded as --num_solutions for tournament scripts")
+    # Forwarded tournament_merge arguments.
+    parser.add_argument("--merger_model", type=str, help="Forwarded as --merger_model for tournament_merge")
+    parser.add_argument("--merger_max_tokens", type=int, help="Forwarded as --merger_max_tokens for tournament_merge")
     # Forwarded baseline arguments.
     parser.add_argument("--baseline_max_tokens", type=int, help="Forwarded as --max_tokens for baseline_solve")
     return parser.parse_args()
