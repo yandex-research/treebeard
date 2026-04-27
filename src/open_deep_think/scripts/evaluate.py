@@ -41,7 +41,7 @@ def load_solutions(solutions_dir: Path) -> dict[str, str]:
     # Pattern: Task_{task_id}_seed_42.txt
     pattern = re.compile(r"Task_(\d+)_solution.txt")
 
-    for file_path in solutions_dir.glob("Task_*_solution.txt"):
+    for file_path in solutions_dir.rglob("Task_*_solution.txt"):
         match = pattern.match(file_path.name)
         if match:
             task_id = match.group(1)
@@ -105,6 +105,7 @@ def evaluate_solutions(
             "status": None,
             "model_answer": None,
             "is_correct": None,
+            "judge_response": None,
         }
 
         # Check if solution exists
@@ -128,11 +129,12 @@ def evaluate_solutions(
 
         # Judge the answer using the full solution text
         results["total"] += 1
-        is_correct = judge_answer(
+        is_correct, judge_response = judge_answer(
             problem_statement, solution_text, ground_truth, judge_model_name, judge_prompt_template, max_tokens
         )
 
         result_entry["is_correct"] = is_correct
+        result_entry["judge_response"] = judge_response
 
         if is_correct:
             results["correct"] += 1
