@@ -2,6 +2,11 @@
 
 This script processes problems from a dataset, sends them to an API for solving,
 and stores the results in separate files for reasoning, solution, and full response.
+
+Outputs per task:
+- ``Task_{id}_solution.txt``
+- ``Task_{id}_reasoning.txt``
+- ``Task_{id}_response.json``
 """
 
 from __future__ import annotations
@@ -28,8 +33,29 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logger = logging.getLogger(__name__)
 
 
+def is_task_done(output_path: str, task_id: int) -> bool:
+    """Return True if the task solution file exists and is non-empty.
+
+    A non-empty ``Task_{task_id}_solution.txt`` indicates the task was
+    successfully completed in a previous run and can be skipped.
+
+    Args:
+        output_path: Base directory for output files.
+        task_id: Task identifier.
+
+    Returns:
+        True if the solution file exists and contains at least one character.
+
+    """
+    solution_file = Path(output_path) / f"Task_{task_id}_solution.txt"
+    return solution_file.exists() and solution_file.stat().st_size > 0
+
+
 def save_results(output_path: str, task_id: int, reasoning: str, solution: str, response_data: dict[str, Any]) -> None:
     """Save reasoning, solution, and full response to separate files.
+
+    The solution file is written last so its presence reliably signals that
+    the task completed successfully.
 
     Args:
         output_path: Base directory for output files
@@ -47,15 +73,15 @@ def save_results(output_path: str, task_id: int, reasoning: str, solution: str, 
     with reasoning_file.open("w", encoding="utf-8") as f:
         f.write(reasoning)
 
-    # Save solution
-    solution_file = output_dir / f"Task_{task_id}_solution.txt"
-    with solution_file.open("w", encoding="utf-8") as f:
-        f.write(solution)
-
     # Save full response
     response_file = output_dir / f"Task_{task_id}_response.json"
     with response_file.open("w", encoding="utf-8") as f:
         json.dump(response_data, f, indent=2, ensure_ascii=False)
+
+    # Save final solution last — its presence signals successful completion
+    solution_file = output_dir / f"Task_{task_id}_solution.txt"
+    with solution_file.open("w", encoding="utf-8") as f:
+        f.write(solution)
 
 
 def solve_problem(  # noqa: PLR0913
@@ -148,6 +174,9 @@ def main() -> None:
     # Process tasks in range
     logger.info("Processing tasks %s to %s", args.start, args.end - 1)
     for task_id in range(args.start, args.end):
+        if is_task_done(output_path, task_id):
+            logger.info("Task %s already solved — skipping.", task_id)
+            continue
         problem = dataset[task_id]["Problem"]
         solve_problem(
             problem=problem,

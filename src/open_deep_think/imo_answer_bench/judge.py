@@ -21,7 +21,7 @@ def judge_answer(  # noqa: PLR0913
     judge_model_name: str,
     judge_prompt_template: str = JUDGE_PROMPT_TEMPLATE,
     max_tokens: int = 2048,
-) -> bool:
+) -> tuple[bool, str]:
     """Use the API-based judge model to compare model solution with ground truth.
 
     Args:
@@ -33,7 +33,9 @@ def judge_answer(  # noqa: PLR0913
         max_tokens: Maximum tokens for the judge response
 
     Returns:
-        True if answers match, False otherwise
+        A tuple of (is_correct, judge_response_text) where is_correct is True
+        if the model answer matches the ground truth, and judge_response_text
+        is the raw text returned by the judge model.
 
     """
     # Format the prompt with the problem, solution, and answer
@@ -54,7 +56,7 @@ def judge_answer(  # noqa: PLR0913
 
         # Extract response content from ChatCompletion
         if not completion.choices:
-            return False
+            return False, ""
         message = completion.choices[0].message
         response_text = message.content if message.content is not None else ""
 
@@ -65,10 +67,10 @@ def judge_answer(  # noqa: PLR0913
 
         if boxed_matches:
             verdict = boxed_matches[-1].strip().lower()
-            return verdict == "correct"
+            return verdict == "correct", response_text
 
         # Fallback: check if "correct" appears in the response
-        return "correct" in response_text.lower() and "incorrect" not in response_text.lower()
+        return "correct" in response_text.lower() and "incorrect" not in response_text.lower(), response_text
 
     except (KeyError, TypeError, ValueError, OSError):
-        return False
+        return False, ""

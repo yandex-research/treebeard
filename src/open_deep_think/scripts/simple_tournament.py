@@ -17,8 +17,6 @@ No refinement or self-improvement is performed — this is a pure selection pipe
 
 Outputs are saved per task with files compatible with `scripts/evaluate.py`:
 - `Task_{id}_solution.txt`
-- `Task_{id}_reasoning.txt`
-- `Task_{id}_response.json`
 - `Task_{id}_progress.json`
 - `Task_{id}_llm_outputs.jsonl`
 """
@@ -40,7 +38,7 @@ import urllib3
 from datasets import load_dataset
 
 from open_deep_think.api import chat_api_call
-from open_deep_think.imo_answer_bench.extract import extract_reasoning, extract_solution
+from open_deep_think.imo_answer_bench.extract import extract_solution
 from open_deep_think.imo_answer_bench.templates import (
     IMO25_BINARY_CORRECTNESS_PROMPT,
     IMO25_STEP1_SYSTEM_PROMPT,
@@ -58,7 +56,6 @@ if TYPE_CHECKING:
 LOGGER = logging.getLogger(__name__)
 _YES_PATTERN = re.compile(r"\byes\b", re.IGNORECASE)
 _PICK_PATTERN = re.compile(r"\b([12])\b")
-_MIN_CANDIDATES_FOR_TOURNAMENT = 2
 
 
 @dataclass(frozen=True)
@@ -84,8 +81,6 @@ class TaskFiles:
     """Filesystem paths for per-task outputs."""
 
     solution: Path
-    reasoning: Path
-    response: Path
     progress: Path
     llm_outputs: Path
 
@@ -122,12 +117,11 @@ class Candidate:
 
 
 class TaskCallLogger:
-    """Persist every per-task LLM call to JSONL files."""
+    """Persist every per-task LLM call to a per-task JSONL file."""
 
-    def __init__(self, task_id: int, task_log_path: Path, global_log_path: Path) -> None:
+    def __init__(self, task_id: int, task_log_path: Path) -> None:
         self._task_id = task_id
         self._task_log_path = task_log_path
-        self._global_log_path = global_log_path
         self._next_call_id = 1
         self._task_log_path.write_text("", encoding="utf-8")
 
@@ -143,7 +137,7 @@ class TaskCallLogger:
         response_text: str,
         error: str | None = None,
     ) -> int:
-        """Record a model interaction to task and global JSONL logs."""
+        """Record a model interaction to the per-task JSONL log."""
         call_id = self._next_call_id
         self._next_call_id += 1
         payload = {
@@ -160,7 +154,6 @@ class TaskCallLogger:
             "error": error,
         }
         append_jsonl(self._task_log_path, payload)
-        append_jsonl(self._global_log_path, payload)
         return call_id
 
 
@@ -514,12 +507,28 @@ def run_match(  # noqa: PLR0913
     return winner
 
 
+def is_task_done(output_dir: Path, task_id: int) -> bool:
+    """Return True if the task solution file exists and is non-empty.
+
+    A non-empty ``Task_{task_id}_solution.txt`` indicates the task was
+    successfully completed in a previous run and can be skipped.
+
+    Args:
+        output_dir: Directory containing per-task output files.
+        task_id: Task identifier.
+
+    Returns:
+        True if the solution file exists and contains at least one character.
+
+    """
+    solution_file = output_dir / f"Task_{task_id}_solution.txt"
+    return solution_file.exists() and solution_file.stat().st_size > 0
+
+
 def task_files(output_dir: Path, task_id: int) -> TaskFiles:
     """Build per-task output file paths."""
     return TaskFiles(
         solution=output_dir / f"Task_{task_id}_solution.txt",
-        reasoning=output_dir / f"Task_{task_id}_reasoning.txt",
-        response=output_dir / f"Task_{task_id}_response.json",
         progress=output_dir / f"Task_{task_id}_progress.json",
         llm_outputs=output_dir / f"Task_{task_id}_llm_outputs.jsonl",
     )
@@ -529,20 +538,22 @@ def save_task_outputs(
     *,
     files: TaskFiles,
     solution_text: str,
-    latest_solver_completion: ChatCompletion | None,
     progress_payload: dict[str, Any],
 ) -> None:
-    """Persist final task outputs to disk."""
-    files.solution.write_text(solution_text, encoding="utf-8")
+    """Persist final task outputs to disk.
 
-    reasoning_text = ""
-    response_payload: dict[str, Any] = {}
-    if latest_solver_completion is not None:
-        reasoning_text = extract_reasoning(latest_solver_completion)
-        response_payload = latest_solver_completion.model_dump()
-    files.reasoning.write_text(reasoning_text, encoding="utf-8")
-    write_json(files.response, response_payload)
+    Writes the progress file, then writes the canonical ``solution.txt``.
+    The solution file is written last so its presence reliably signals that
+    the task completed successfully.
+
+    Args:
+        files: Per-task file paths.
+        solution_text: Final solution text.
+        progress_payload: Full pipeline trace to serialise as JSON.
+
+    """
     write_json(files.progress, progress_payload)
+    files.solution.write_text(solution_text, encoding="utf-8")
 
 
 _FAILED_VERIFICATION = VerificationResult(
@@ -606,9 +617,7 @@ def _generate_all_candidates(
                 verification=_FAILED_VERIFICATION,
             )
             candidates.append(dummy)
-            candidate_payloads.append(
-                {"candidate_index": idx, "status": "generation_error", "error": str(exc)}
-            )
+            candidate_payloads.append({"candidate_index": idx, "status": "generation_error", "error": str(exc)})
         else:
             candidates.append(candidate)
             candidate_payloads.append(
@@ -747,30 +756,6 @@ def _play_match(  # noqa: PLR0913
         return winner, "ok"
 
 
-def _persist_best_candidate(
-    *,
-    candidates: list[Candidate],
-    files: TaskFiles,
-    progress: dict[str, Any],
-) -> None:
-    """Save the best available candidate when the tournament cannot run."""
-    progress["completed_at"] = utc_now_iso()
-    best = candidates[0] if candidates else None
-    persisted_solution = ""
-    latest_completion: ChatCompletion | None = None
-    if best is not None:
-        persisted_solution = extract_solution(best.completion) if best.completion is not None else ""
-        if not persisted_solution:
-            persisted_solution = best.solution_text
-        latest_completion = best.completion
-    save_task_outputs(
-        files=files,
-        solution_text=persisted_solution,
-        latest_solver_completion=latest_completion,
-        progress_payload=progress,
-    )
-
-
 def _task_result(*, task_id: int, status: str, files: TaskFiles) -> dict[str, Any]:
     """Build the standard per-task result dict."""
     return {
@@ -788,7 +773,6 @@ def solve_task(
     problem_statement: str,
     config: TournamentConfig,
     output_dir: Path,
-    global_llm_log_path: Path,
 ) -> dict[str, Any]:
     """Solve one IMO AnswerBench task with the tournament selection pipeline.
 
@@ -802,14 +786,13 @@ def solve_task(
         problem_statement: Raw problem text.
         config: Pipeline configuration.
         output_dir: Directory for per-task output files.
-        global_llm_log_path: Path to the global JSONL log shared across tasks.
 
     Returns:
         A summary dict with task_id, status, and output file paths.
 
     """
     files = task_files(output_dir, task_id)
-    call_logger = TaskCallLogger(task_id=task_id, task_log_path=files.llm_outputs, global_log_path=global_llm_log_path)
+    call_logger = TaskCallLogger(task_id=task_id, task_log_path=files.llm_outputs)
 
     progress: dict[str, Any] = {
         "task_id": task_id,
@@ -855,7 +838,6 @@ def solve_task(
     save_task_outputs(
         files=files,
         solution_text=persisted_solution,
-        latest_solver_completion=final_candidate.completion,
         progress_payload=progress,
     )
     return _task_result(task_id=task_id, status=progress["status"], files=files)
@@ -904,25 +886,62 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--run_name",
         type=str,
-        help="Optional run directory name (default: UTC timestamp)",
+        default="default",
+        help="Run directory name shared across all shards (default: 'default')",
+    )
+    parser.add_argument(
+        "--shard_index",
+        type=int,
+        default=0,
+        help="Zero-based shard index; only shard 0 writes config.json (default: 0)",
     )
     return parser.parse_args()
 
 
-def configure_logging(log_file: Path) -> None:
-    """Configure file and stdout logging."""
+def configure_logging() -> None:
+    """Configure stdout-only logging."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s - %(message)s",
-        handlers=[logging.FileHandler(log_file), logging.StreamHandler(sys.stdout)],
+        handlers=[logging.StreamHandler(sys.stdout)],
         force=True,
     )
+
+
+def write_config_if_shard_zero(run_dir: Path, config_dict: dict[str, Any], shard_index: int) -> None:
+    """Write config.json for shard 0; assert it matches on reruns.
+
+    Only shard 0 writes the config file.  If the file already exists when shard 0
+    runs, the existing content is compared to the current config and a
+    :class:`ValueError` is raised if they differ (indicating a config mismatch
+    between runs targeting the same output directory).
+
+    Args:
+        run_dir: Output directory where ``config.json`` lives.
+        config_dict: Serialisable config dict to write.
+        shard_index: Zero-based shard index; only shard 0 acts.
+
+    """
+    if shard_index != 0:
+        return
+    # Normalise via JSON round-trip so that tuples become lists, matching what
+    # json.loads returns when reading an existing config file.
+    normalised = json.loads(json.dumps(config_dict))
+    config_path = run_dir / "config.json"
+    if config_path.exists():
+        existing = json.loads(config_path.read_text(encoding="utf-8"))
+        if existing != normalised:
+            msg = f"Config mismatch in {config_path}.\nExisting: {existing}\nCurrent:  {normalised}"
+            raise ValueError(msg)
+        LOGGER.info("Config matches existing %s — no rewrite needed.", config_path)
+    else:
+        write_json(config_path, normalised)
+        LOGGER.info("Config written to %s", config_path)
 
 
 def main() -> None:
     """Run the tournament pipeline over a task range."""
     args = parse_args()
-    run_started_at = utc_now_iso()
 
     if args.start < 0:
         msg = "--start must be non-negative"
@@ -939,11 +958,10 @@ def main() -> None:
     classifier_model = args.classifier_model or verifier_model
     judge_model = args.judge_model or verifier_model
 
-    run_name = args.run_name or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    run_dir = Path(args.output_path) / "tournament_baseline" / sanitize_model_name(solver_model) / run_name
+    run_dir = Path(args.output_path) / "tournament_baseline" / sanitize_model_name(solver_model) / args.run_name
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    configure_logging(run_dir / "run.log")
+    configure_logging()
     LOGGER.info("Loading dataset: %s (%s)", args.dataset_name, args.dataset_split)
     dataset = load_dataset(args.dataset_name, split=args.dataset_split)
     LOGGER.info("Loaded %s tasks", len(dataset))
@@ -966,13 +984,12 @@ def main() -> None:
         top_p=args.top_p,
         other_prompts=tuple(args.other_prompt),
     )
-    write_json(run_dir / "config.json", asdict(config))
+    write_config_if_shard_zero(run_dir, asdict(config), args.shard_index)
 
-    global_llm_log = run_dir / "all_llm_outputs.jsonl"
-    global_llm_log.write_text("", encoding="utf-8")
-
-    results: list[dict[str, Any]] = []
     for task_id in range(args.start, args.end):
+        if is_task_done(run_dir, task_id):
+            LOGGER.info("Task %s already solved — skipping.", task_id)
+            continue
         problem_statement = dataset[task_id]["Problem"]
         LOGGER.info("Starting task %s", task_id)
         task_result = solve_task(
@@ -980,22 +997,10 @@ def main() -> None:
             problem_statement=problem_statement,
             config=config,
             output_dir=run_dir,
-            global_llm_log_path=global_llm_log,
         )
-        results.append(task_result)
         LOGGER.info("Finished task %s with status=%s", task_id, task_result["status"])
 
-    summary = {
-        "started_at": run_started_at,
-        "completed_at": utc_now_iso(),
-        "run_dir": str(run_dir),
-        "task_range": {"start": args.start, "end": args.end},
-        "results": results,
-        "success_count": sum(result["status"] == "success" for result in results),
-        "failure_count": sum(result["status"] != "success" for result in results),
-    }
-    write_json(run_dir / "run_summary.json", summary)
-    LOGGER.info("Run complete. Summary saved to %s", run_dir / "run_summary.json")
+    LOGGER.info("Run complete. Output dir: %s", run_dir)
 
 
 if __name__ == "__main__":

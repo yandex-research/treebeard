@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -23,6 +25,7 @@ from open_deep_think.scripts.tournament_merge_improve import (
     run_match,
     run_self_improvement,
     sanitize_model_name,
+    write_config_if_shard_zero,
 )
 
 # ── extract_section ───────────────────────────────────────────────────────────
@@ -484,3 +487,38 @@ def test_run_match_skips_self_improvement_when_first_verify_passes() -> None:
     mock_improve.assert_not_called()
     assert result.solution_text == "Merged solution."
     assert result.verification.is_pass is True
+
+
+# ── write_config_if_shard_zero ────────────────────────────────────────────────
+
+
+def test_write_config_if_shard_zero_writes_file_on_first_run(tmp_path: Path) -> None:
+    """Shard 0 writes config.json when the file does not yet exist."""
+    config = {"solver_model": "m", "num_solutions": 4}
+    write_config_if_shard_zero(tmp_path, config, shard_index=0)
+    written = json.loads((tmp_path / "config.json").read_text())
+    assert written == config
+
+
+def test_write_config_if_shard_zero_skips_for_non_zero_shard(tmp_path: Path) -> None:
+    """Non-zero shards must not write config.json."""
+    config = {"solver_model": "m", "num_solutions": 4}
+    write_config_if_shard_zero(tmp_path, config, shard_index=1)
+    assert not (tmp_path / "config.json").exists()
+
+
+def test_write_config_if_shard_zero_passes_when_config_matches(tmp_path: Path) -> None:
+    """Shard 0 must not raise when the existing config matches the current one."""
+    config = {"solver_model": "m", "num_solutions": 4}
+    (tmp_path / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    # Should not raise.
+    write_config_if_shard_zero(tmp_path, config, shard_index=0)
+
+
+def test_write_config_if_shard_zero_raises_on_config_mismatch(tmp_path: Path) -> None:
+    """Shard 0 must raise ValueError when the existing config differs from the current one."""
+    old_config = {"solver_model": "m", "num_solutions": 4}
+    new_config = {"solver_model": "m", "num_solutions": 8}
+    (tmp_path / "config.json").write_text(json.dumps(old_config), encoding="utf-8")
+    with pytest.raises(ValueError, match="Config mismatch"):
+        write_config_if_shard_zero(tmp_path, new_config, shard_index=0)

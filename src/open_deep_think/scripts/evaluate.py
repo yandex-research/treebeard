@@ -172,8 +172,8 @@ def main() -> None:
     parser.add_argument(
         "--judge_model",
         type=str,
-        default="gemini-3-flash",
-        help="Judge model name (e.g., 'gemini-3-flash', 'gemini-3-pro')",
+        default="google/gemini-3.1-pro-preview",
+        help="Judge model name",
     )
     parser.add_argument("--max_tokens", type=int, default=2048, help="Maximum tokens for judge responses")
 
@@ -194,6 +194,8 @@ def main() -> None:
         judge_model_name=args.judge_model,
         max_tokens=args.max_tokens,
     )
+
+    results["judge_model"] = args.judge_model
 
     # Print summary
     logger.info("")

@@ -1,11 +1,19 @@
-"""Launch parallel task-interval runs of solver scripts.
+"""Launch parallel task runs of solver scripts using a global work queue.
 
 This wrapper keeps orchestration intentionally simple:
-- Split `[start, end)` into `--concurrency` contiguous shards.
-- Run one solver process per shard.
-- Start all shard commands together.
+- Build a queue of individual task indices from ``[start, end)``.
+- Maintain a pool of up to ``--concurrency`` active child processes.
+- As each process finishes, immediately launch the next task from the queue.
 
-Each shard gets a unique `--run_name` suffix to avoid output collisions.
+This ensures full CPU/API utilisation even when individual tasks vary widely
+in duration — no worker ever sits idle while tasks remain in the queue.
+
+All child processes write into the same output directory (``--run_name`` is
+shared).  The first task in the range (``start``) is assigned
+``--shard_index 0`` so that it writes ``config.json``; all other tasks receive
+a non-zero shard index and skip that write.
+
+Logs are written to a timestamped subdirectory under the launcher log dir.
 """
 
 from __future__ import annotations
@@ -16,6 +24,7 @@ import logging
 import subprocess
 import sys
 import time
+from collections import deque
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,57 +33,28 @@ from typing import Any
 LOGGER = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class Shard:
-    """A task interval to solve in one child process."""
-
-    index: int
-    start: int
-    end: int
+def sanitize_model_name(model: str) -> str:
+    """Convert a model identifier to a filesystem-safe slug."""
+    return model.replace("/", "__").replace(":", "_")
 
 
 @dataclass(frozen=True)
-class ShardResult:
-    """Execution result for one shard process."""
+class TaskSlot:
+    """A single task to be solved in one child process."""
 
-    shard: Shard
+    task_index: int
+    shard_index: int
+
+
+@dataclass(frozen=True)
+class TaskResult:
+    """Execution result for one task process."""
+
+    slot: TaskSlot
     returncode: int
     command: list[str]
     log_path: str
     elapsed_seconds: float
-
-
-def split_by_concurrency(start: int, end: int, concurrency: int) -> list[Shard]:
-    """Split `[start, end)` into contiguous shards based on concurrency.
-
-    Args:
-        start: Start index (inclusive).
-        end: End index (exclusive).
-        concurrency: Requested number of parallel shards.
-
-    Returns:
-        Ordered shard list with contiguous non-overlapping intervals.
-
-    """
-    if concurrency <= 0:
-        msg = "concurrency must be positive"
-        raise ValueError(msg)
-    if end <= start:
-        return []
-
-    task_count = end - start
-    shard_count = min(concurrency, task_count)
-    base_size = task_count // shard_count
-    remainder = task_count % shard_count
-
-    shards: list[Shard] = []
-    shard_start = start
-    for shard_index in range(shard_count):
-        shard_size = base_size + (1 if shard_index < remainder else 0)
-        shard_end = shard_start + shard_size
-        shards.append(Shard(index=shard_index, start=shard_start, end=shard_end))
-        shard_start = shard_end
-    return shards
 
 
 def add_optional_arg(command: list[str], flag: str, value: str | float | None) -> None:
@@ -100,9 +80,22 @@ def _append_common_tournament_args(command: list[str], args: argparse.Namespace)
         command.extend(["--other_prompt", other_prompt])
 
 
-def build_child_command(args: argparse.Namespace, shard: Shard, base_run_name: str) -> list[str]:
-    """Build the child solver command for one shard."""
-    run_name = f"{base_run_name}_shard_{shard.index:03d}"
+def build_child_command(args: argparse.Namespace, slot: TaskSlot, base_run_name: str) -> list[str]:
+    """Build the child solver command for one task slot.
+
+    Each child processes exactly one task (``--start task_index --end task_index+1``).
+    The ``--shard_index`` is set to ``slot.shard_index``; only shard 0 writes
+    ``config.json``, so the first task in the range gets shard index 0.
+
+    Args:
+        args: Parsed launcher arguments.
+        slot: The task slot describing which task to run and its shard index.
+        base_run_name: Shared run name forwarded to all child scripts.
+
+    Returns:
+        A list of strings forming the child process command.
+
+    """
     module_map = {
         "imo25": "open_deep_think.scripts.imo25_solve",
         "simple_tournament": "open_deep_think.scripts.simple_tournament",
@@ -116,9 +109,9 @@ def build_child_command(args: argparse.Namespace, shard: Shard, base_run_name: s
         "-m",
         module_name,
         "--start",
-        str(shard.start),
+        str(slot.task_index),
         "--end",
-        str(shard.end),
+        str(slot.task_index + 1),
         "--model",
         args.model,
         "--output_path",
@@ -126,7 +119,7 @@ def build_child_command(args: argparse.Namespace, shard: Shard, base_run_name: s
     ]
 
     if args.script == "imo25":
-        command.extend(["--run_name", run_name])
+        command.extend(["--run_name", base_run_name, "--shard_index", str(slot.shard_index)])
         add_optional_arg(command, "--verifier_model", args.verifier_model)
         add_optional_arg(command, "--classifier_model", args.classifier_model)
         add_optional_arg(command, "--solver_max_tokens", args.solver_max_tokens)
@@ -143,12 +136,12 @@ def build_child_command(args: argparse.Namespace, shard: Shard, base_run_name: s
         for other_prompt in args.other_prompt:
             command.extend(["--other_prompt", other_prompt])
     elif args.script == "simple_tournament":
-        command.extend(["--run_name", run_name])
+        command.extend(["--run_name", base_run_name, "--shard_index", str(slot.shard_index)])
         _append_common_tournament_args(command, args)
         add_optional_arg(command, "--judge_model", args.judge_model)
         add_optional_arg(command, "--judge_max_tokens", args.judge_max_tokens)
     elif args.script in {"tournament_merge", "tournament_merge_improve"}:
-        command.extend(["--run_name", run_name])
+        command.extend(["--run_name", base_run_name, "--shard_index", str(slot.shard_index)])
         _append_common_tournament_args(command, args)
         add_optional_arg(command, "--merger_model", args.merger_model)
         add_optional_arg(command, "--merger_max_tokens", args.merger_max_tokens)
@@ -159,55 +152,118 @@ def build_child_command(args: argparse.Namespace, shard: Shard, base_run_name: s
     return command
 
 
-def run_shard(args: argparse.Namespace, shard: Shard, base_run_name: str, launcher_log_dir: Path) -> ShardResult:
-    """Execute one shard process and return completion metadata."""
-    command = build_child_command(args=args, shard=shard, base_run_name=base_run_name)
-    log_path = launcher_log_dir / f"shard_{shard.index:03d}.log"
-    started = time.monotonic()
+def run_worker_pool(
+    args: argparse.Namespace,
+    slots: list[TaskSlot],
+    base_run_name: str,
+    launcher_log_dir: Path,
+) -> list[TaskResult]:
+    """Run all task slots through a bounded worker pool.
 
-    with log_path.open("w", encoding="utf-8") as log_file:
-        completed = subprocess.run(  # noqa: S603
-            command,
-            check=False,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+    Maintains up to ``args.concurrency`` active child processes at all times.
+    As each process finishes, the next slot from the queue is launched
+    immediately, ensuring full parallelism regardless of per-task duration.
 
-    elapsed_seconds = time.monotonic() - started
-    return ShardResult(
-        shard=shard,
-        returncode=completed.returncode,
-        command=command,
-        log_path=str(log_path),
-        elapsed_seconds=elapsed_seconds,
-    )
+    Args:
+        args: Parsed launcher arguments (used for ``concurrency`` and child command building).
+        slots: Ordered list of task slots to execute.
+        base_run_name: Shared run name forwarded to child scripts.
+        launcher_log_dir: Directory where per-task log files are written.
+
+    Returns:
+        List of :class:`TaskResult` objects in completion order.
+
+    """
+    pending: deque[TaskSlot] = deque(slots)
+    # active: list of (slot, command, process, log_path, start_monotonic)
+    active: list[tuple[TaskSlot, list[str], subprocess.Popen[str], str, float]] = []
+    results: list[TaskResult] = []
+
+    while pending or active:
+        # Fill up to concurrency slots.
+        while pending and len(active) < args.concurrency:
+            slot = pending.popleft()
+            command = build_child_command(args=args, slot=slot, base_run_name=base_run_name)
+            log_path = launcher_log_dir / f"task_{slot.task_index:06d}.log"
+            log_file = log_path.open("w", encoding="utf-8")
+            process = subprocess.Popen(  # noqa: S603
+                command,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            log_file.close()
+            LOGGER.info(
+                "Launched task %s (shard_index=%s), log=%s",
+                slot.task_index,
+                slot.shard_index,
+                log_path,
+            )
+            active.append((slot, command, process, str(log_path), time.monotonic()))
+
+        # Poll for any finished process.
+        still_active = []
+        for slot, command, process, log_path, started_monotonic in active:
+            returncode = process.poll()
+            if returncode is None:
+                still_active.append((slot, command, process, log_path, started_monotonic))
+            else:
+                elapsed = time.monotonic() - started_monotonic
+                result = TaskResult(
+                    slot=slot,
+                    returncode=returncode,
+                    command=command,
+                    log_path=log_path,
+                    elapsed_seconds=elapsed,
+                )
+                results.append(result)
+                status = "ok" if returncode == 0 else "failed"
+                LOGGER.info(
+                    "Task %s finished (%s) in %.1fs, log=%s",
+                    slot.task_index,
+                    status,
+                    elapsed,
+                    log_path,
+                )
+        active = still_active
+
+        # Avoid busy-waiting when all slots are occupied.
+        if active and (not pending or len(active) >= args.concurrency):
+            time.sleep(0.5)
+
+    return results
 
 
 def parse_args() -> argparse.Namespace:
     """Parse launcher and child-forwarded options."""
-    parser = argparse.ArgumentParser(description="Run parallel task-interval solver shards")
+    parser = argparse.ArgumentParser(description="Run parallel task solver using a global work queue")
     parser.add_argument("--start", type=int, required=True, help="Starting task index (inclusive)")
     parser.add_argument("--end", type=int, required=True, help="Ending task index (exclusive)")
     parser.add_argument("--model", type=str, required=True, help="Solver model name")
     parser.add_argument("--output_path", type=str, required=True, help="Base output directory for child runs")
     parser.add_argument(
         "--script",
-        choices=["imo25", "simple_tournament", "tournament_merge", "tournament_merge_improve", "baseline"],
-        default="imo25",
-        help="Child script to run in parallel shards",
+        choices=["baseline", "imo25", "simple_tournament", "tournament_merge", "tournament_merge_improve"],
+        default="baseline",
+        help="Child script to run in parallel",
     )
 
-    parser.add_argument("--concurrency", type=int, default=1, help="Number of parallel shards/processes")
-    parser.add_argument("--run_name", type=str, help="Base run name for all shards")
+    parser.add_argument("--concurrency", type=int, default=1, help="Maximum number of parallel worker processes")
+    parser.add_argument(
+        "--run_name",
+        type=str,
+        default="default",
+        help="Logical run name forwarded to child scripts and used in log path (default: 'default')",
+    )
     parser.add_argument(
         "--launcher_log_dir",
         type=str,
         help=(
-            "Directory for launcher shard logs and summary (default: <output_path>/imo25_parallel_launcher/<run_name>)"
+            "Directory for launcher task logs and summary "
+            "(default: <output_path>/<script>_parallel_launcher/<model>/<run_name>/<timestamp>/)"
         ),
     )
-    parser.add_argument("--dry_run", action="store_true", help="Print shard commands without executing them")
+    parser.add_argument("--dry_run", action="store_true", help="Print task commands without executing them")
 
     # Forwarded imo25 arguments.
     parser.add_argument("--verifier_model", type=str)
@@ -254,74 +310,76 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError(msg)
 
 
+def build_task_slots(start: int, end: int) -> list[TaskSlot]:
+    """Build an ordered list of task slots for the range ``[start, end)``.
+
+    The first task (``start``) receives ``shard_index=0`` so that it writes
+    ``config.json``; all subsequent tasks receive a non-zero shard index and
+    skip that write.
+
+    Args:
+        start: Start index (inclusive).
+        end: End index (exclusive).
+
+    Returns:
+        Ordered list of :class:`TaskSlot` objects, one per task.
+
+    """
+    return [TaskSlot(task_index=idx, shard_index=0 if idx == start else idx - start) for idx in range(start, end)]
+
+
 def main() -> int:
-    """Execute shard orchestration and return process exit code."""
+    """Execute queue-based task orchestration and return process exit code."""
     args = parse_args()
     validate_args(args)
 
-    base_run_name = args.run_name or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    base_run_name = args.run_name or "default"
+    launch_timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    model_slug = sanitize_model_name(args.model)
     launcher_log_dir = (
         Path(args.launcher_log_dir)
         if args.launcher_log_dir
-        else Path(args.output_path) / f"{args.script}_parallel_launcher" / base_run_name
+        else Path(args.output_path)
+        / f"{args.script}_parallel_launcher"
+        / model_slug
+        / base_run_name
+        / launch_timestamp
     )
     launcher_log_dir.mkdir(parents=True, exist_ok=True)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s - %(message)s", force=True)
 
-    shards = split_by_concurrency(start=args.start, end=args.end, concurrency=args.concurrency)
-    if not shards:
-        LOGGER.info("No shards to run.")
+    slots = build_task_slots(start=args.start, end=args.end)
+    if not slots:
+        LOGGER.info("No tasks to run.")
         return 0
 
-    LOGGER.info("Script: %s | shards: %s (requested concurrency: %s)", args.script, len(shards), args.concurrency)
-    for shard in shards:
-        LOGGER.info("Shard %03d interval [%s, %s)", shard.index, shard.start, shard.end)
+    LOGGER.info(
+        "Script: %s | tasks: %s | concurrency: %s | range: [%s, %s)",
+        args.script,
+        len(slots),
+        args.concurrency,
+        args.start,
+        args.end,
+    )
 
     if args.dry_run:
-        for shard in shards:
-            command = build_child_command(args=args, shard=shard, base_run_name=base_run_name)
-            LOGGER.info("DRY RUN shard %03d: %s", shard.index, " ".join(command))
+        for slot in slots:
+            command = build_child_command(args=args, slot=slot, base_run_name=base_run_name)
+            LOGGER.info("DRY RUN task %s (shard_index=%s): %s", slot.task_index, slot.shard_index, " ".join(command))
         return 0
 
     started_at = datetime.now(UTC)
-    processes: list[tuple[Shard, list[str], subprocess.Popen[str], str, float]] = []
-    for shard in shards:
-        command = build_child_command(args=args, shard=shard, base_run_name=base_run_name)
-        log_path = launcher_log_dir / f"shard_{shard.index:03d}.log"
-        log_file = log_path.open("w", encoding="utf-8")
-        process = subprocess.Popen(  # noqa: S603
-            command,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        log_file.close()
-        processes.append((shard, command, process, str(log_path), time.monotonic()))
-
-    results: list[ShardResult] = []
-    for shard, command, process, log_path, started_monotonic in processes:
-        returncode = process.wait()
-        result = ShardResult(
-            shard=shard,
-            returncode=returncode,
-            command=command,
-            log_path=log_path,
-            elapsed_seconds=time.monotonic() - started_monotonic,
-        )
-        results.append(result)
-        status = "ok" if result.returncode == 0 else "failed"
-        LOGGER.info(
-            "Shard %03d finished (%s) in %.1fs, log=%s",
-            result.shard.index,
-            status,
-            result.elapsed_seconds,
-            result.log_path,
-        )
-
+    results = run_worker_pool(
+        args=args,
+        slots=slots,
+        base_run_name=base_run_name,
+        launcher_log_dir=launcher_log_dir,
+    )
     completed_at = datetime.now(UTC)
-    results.sort(key=lambda item: item.shard.index)
-    failed_count = sum(result.returncode != 0 for result in results)
+
+    results.sort(key=lambda r: r.slot.task_index)
+    failed_count = sum(r.returncode != 0 for r in results)
     summary: dict[str, Any] = {
         "base_run_name": base_run_name,
         "started_at": started_at.isoformat(),
@@ -331,7 +389,7 @@ def main() -> int:
         "task_range": {"start": args.start, "end": args.end},
         "failed_count": failed_count,
         "succeeded_count": len(results) - failed_count,
-        "results": [asdict(result) for result in results],
+        "results": [asdict(r) for r in results],
     }
     summary_path = launcher_log_dir / "summary.json"
     with summary_path.open("w", encoding="utf-8") as summary_file:
