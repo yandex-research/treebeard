@@ -1,7 +1,8 @@
 """Launch parallel task runs of solver scripts using a global work queue.
 
 This wrapper keeps orchestration intentionally simple:
-- Build a queue of individual task indices from ``[start, end)``.
+- Build a queue of individual task indices from ``[start, end)`` or from a
+  file of explicit task IDs (``--task_ids_file``).
 - Maintain a pool of up to ``--concurrency`` active child processes.
 - As each process finishes, immediately launch the next task from the queue.
 
@@ -9,9 +10,9 @@ This ensures full CPU/API utilisation even when individual tasks vary widely
 in duration — no worker ever sits idle while tasks remain in the queue.
 
 All child processes write into the same output directory (``--run_name`` is
-shared).  The first task in the range (``start``) is assigned
-``--shard_index 0`` so that it writes ``config.json``; all other tasks receive
-a non-zero shard index and skip that write.
+shared).  The first task in the queue is assigned ``--shard_index 0`` so that
+it writes ``config.json``; all other tasks receive a non-zero shard index and
+skip that write.
 
 Logs are written to a timestamped subdirectory under the launcher log dir.
 """
@@ -235,10 +236,26 @@ def run_worker_pool(
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse launcher and child-forwarded options."""
+    """Parse launcher and child-forwarded options.
+
+    Task source is specified via one of two mutually exclusive modes:
+
+    * ``--task_ids_file PATH`` — read explicit task IDs from a text file
+      (one integer per line).  ``--start`` and ``--end`` must not be given.
+    * ``--start N --end M`` — run all tasks in the range ``[N, M)``.
+      ``--task_ids_file`` must not be given.
+
+    Mutual exclusivity is enforced in :func:`validate_args`.
+    """
     parser = argparse.ArgumentParser(description="Run parallel task solver using a global work queue")
-    parser.add_argument("--start", type=int, required=True, help="Starting task index (inclusive)")
-    parser.add_argument("--end", type=int, required=True, help="Ending task index (exclusive)")
+    parser.add_argument(
+        "--task_ids_file",
+        type=str,
+        default=None,
+        help=("Path to a text file with one task ID per line. Mutually exclusive with --start/--end."),
+    )
+    parser.add_argument("--start", type=int, default=None, help="Starting task index (inclusive). Requires --end.")
+    parser.add_argument("--end", type=int, default=None, help="Ending task index (exclusive). Requires --start.")
     parser.add_argument("--model", type=str, required=True, help="Solver model name")
     parser.add_argument("--output_path", type=str, required=True, help="Base output directory for child runs")
     parser.add_argument(
@@ -298,16 +315,68 @@ def parse_args() -> argparse.Namespace:
 
 
 def validate_args(args: argparse.Namespace) -> None:
-    """Validate essential launcher argument constraints."""
-    if args.start < 0:
-        msg = "--start must be non-negative"
+    """Validate essential launcher argument constraints.
+
+    Exactly one of ``--task_ids_file`` or ``--start``/``--end`` must be
+    provided.  When using the range form both ``--start`` and ``--end`` are
+    required and ``--end`` must be strictly greater than ``--start``.
+
+    Raises:
+        ValueError: On any invalid combination or out-of-range value.
+
+    """
+    using_file = args.task_ids_file is not None
+    using_range = args.start is not None or args.end is not None
+
+    if using_file and using_range:
+        msg = "--task_ids_file is mutually exclusive with --start/--end"
         raise ValueError(msg)
-    if args.end <= args.start:
-        msg = "--end must be greater than --start"
-        raise ValueError(msg)
+
+    if not using_file:
+        # Range mode: both --start and --end are required.
+        if args.start is None or args.end is None:
+            msg = "Either --task_ids_file or both --start and --end must be provided"
+            raise ValueError(msg)
+        if args.start < 0:
+            msg = "--start must be non-negative"
+            raise ValueError(msg)
+        if args.end <= args.start:
+            msg = "--end must be greater than --start"
+            raise ValueError(msg)
+
     if args.concurrency <= 0:
         msg = "--concurrency must be positive"
         raise ValueError(msg)
+
+
+def load_task_ids_from_file(path: str) -> list[int]:
+    """Read task IDs from a plain-text file, one ID per line.
+
+    Blank lines and lines starting with ``#`` are ignored.
+
+    Args:
+        path: Path to the task-IDs file.
+
+    Returns:
+        Ordered list of integer task IDs as they appear in the file.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        ValueError: If any non-blank, non-comment line cannot be parsed as int.
+
+    """
+    ids: list[int] = []
+    with Path(path).open(encoding="utf-8") as fh:
+        for lineno, raw in enumerate(fh, start=1):
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            try:
+                ids.append(int(line))
+            except ValueError as exc:
+                msg = f"Cannot parse task ID on line {lineno} of {path!r}: {line!r}"
+                raise ValueError(msg) from exc
+    return ids
 
 
 def build_task_slots(start: int, end: int) -> list[TaskSlot]:
@@ -326,6 +395,22 @@ def build_task_slots(start: int, end: int) -> list[TaskSlot]:
 
     """
     return [TaskSlot(task_index=idx, shard_index=0 if idx == start else idx - start) for idx in range(start, end)]
+
+
+def build_task_slots_from_ids(task_ids: list[int]) -> list[TaskSlot]:
+    """Build an ordered list of task slots from an explicit list of task IDs.
+
+    The first ID in the list receives ``shard_index=0`` so that it writes
+    ``config.json``; all subsequent IDs receive a non-zero shard index.
+
+    Args:
+        task_ids: Ordered list of task IDs to run.
+
+    Returns:
+        Ordered list of :class:`TaskSlot` objects, one per task ID.
+
+    """
+    return [TaskSlot(task_index=tid, shard_index=i) for i, tid in enumerate(task_ids)]
 
 
 def main() -> int:
@@ -349,19 +434,28 @@ def main() -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s - %(message)s", force=True)
 
-    slots = build_task_slots(start=args.start, end=args.end)
-    if not slots:
-        LOGGER.info("No tasks to run.")
-        return 0
-
-    LOGGER.info(
-        "Script: %s | tasks: %s | concurrency: %s | range: [%s, %s)",
-        args.script,
-        len(slots),
-        args.concurrency,
-        args.start,
-        args.end,
-    )
+    if args.task_ids_file is not None:
+        task_ids = load_task_ids_from_file(args.task_ids_file)
+        slots = build_task_slots_from_ids(task_ids)
+        task_source_info: dict[str, Any] = {"task_ids_file": args.task_ids_file, "task_ids": task_ids}
+        LOGGER.info(
+            "Script: %s | tasks: %s | concurrency: %s | source: %s",
+            args.script,
+            len(slots),
+            args.concurrency,
+            args.task_ids_file,
+        )
+    else:
+        slots = build_task_slots(start=args.start, end=args.end)
+        task_source_info = {"start": args.start, "end": args.end}
+        LOGGER.info(
+            "Script: %s | tasks: %s | concurrency: %s | range: [%s, %s)",
+            args.script,
+            len(slots),
+            args.concurrency,
+            args.start,
+            args.end,
+        )
 
     if args.dry_run:
         for slot in slots:
@@ -386,7 +480,7 @@ def main() -> int:
         "completed_at": completed_at.isoformat(),
         "elapsed_seconds": (completed_at - started_at).total_seconds(),
         "concurrency": args.concurrency,
-        "task_range": {"start": args.start, "end": args.end},
+        "task_source": task_source_info,
         "failed_count": failed_count,
         "succeeded_count": len(results) - failed_count,
         "results": [asdict(r) for r in results],

@@ -1087,7 +1087,7 @@ def main() -> None:
     classifier_model = args.classifier_model or verifier_model
     merger_model = args.merger_model or verifier_model
 
-    run_dir = Path(args.output_path) / "tournament_merge_improve" / sanitize_model_name(solver_model) / args.run_name
+    run_dir = Path(args.output_path) / args.run_name
     run_dir.mkdir(parents=True, exist_ok=True)
 
     configure_logging()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import textwrap
 
 import pytest
 
@@ -10,6 +11,8 @@ from open_deep_think.scripts.parallel_solve import (
     TaskSlot,
     build_child_command,
     build_task_slots,
+    build_task_slots_from_ids,
+    load_task_ids_from_file,
     sanitize_model_name,
     validate_args,
 )
@@ -279,25 +282,140 @@ def test_sanitize_model_name_no_special_chars() -> None:
     assert sanitize_model_name("mymodel") == "mymodel"
 
 
+# ── build_task_slots_from_ids ─────────────────────────────────────────────────
+
+
+def test_build_task_slots_from_ids_produces_one_slot_per_id() -> None:
+    """Each task ID in the list gets exactly one slot."""
+    ids = [4, 17, 42, 99]
+    slots = build_task_slots_from_ids(ids)
+    assert [s.task_index for s in slots] == ids
+
+
+def test_build_task_slots_from_ids_first_slot_has_shard_index_zero() -> None:
+    """The first slot must have shard_index=0 so it writes config.json."""
+    slots = build_task_slots_from_ids([10, 20, 30])
+    assert slots[0].shard_index == 0
+
+
+def test_build_task_slots_from_ids_subsequent_slots_have_nonzero_shard_index() -> None:
+    """All slots after the first must have shard_index > 0."""
+    slots = build_task_slots_from_ids([5, 15, 25, 35])
+    for slot in slots[1:]:
+        assert slot.shard_index > 0
+
+
+def test_build_task_slots_from_ids_shard_indices_are_unique() -> None:
+    """Every slot must have a distinct shard_index."""
+    slots = build_task_slots_from_ids([7, 14, 21, 28])
+    shard_indices = [s.shard_index for s in slots]
+    assert len(shard_indices) == len(set(shard_indices))
+
+
+def test_build_task_slots_from_ids_single_id() -> None:
+    """A single-ID list produces one slot with shard_index=0."""
+    slots = build_task_slots_from_ids([99])
+    assert len(slots) == 1
+    assert slots[0].task_index == 99
+    assert slots[0].shard_index == 0
+
+
+def test_build_task_slots_from_ids_empty_list() -> None:
+    """An empty list produces no slots."""
+    assert build_task_slots_from_ids([]) == []
+
+
+# ── load_task_ids_from_file ───────────────────────────────────────────────────
+
+
+def test_load_task_ids_from_file_reads_integers(tmp_path: pytest.TempPathFactory) -> None:
+    """load_task_ids_from_file returns integers in file order."""
+    f = tmp_path / "ids.txt"
+    f.write_text("4\n17\n42\n99\n")
+    assert load_task_ids_from_file(str(f)) == [4, 17, 42, 99]
+
+
+def test_load_task_ids_from_file_skips_blank_lines_and_comments(tmp_path: pytest.TempPathFactory) -> None:
+    """Blank lines and comment lines (starting with #) are ignored."""
+    content = textwrap.dedent("""\
+        # category 0
+        4
+        17
+
+        # category 1
+        42
+    """)
+    f = tmp_path / "ids.txt"
+    f.write_text(content)
+    assert load_task_ids_from_file(str(f)) == [4, 17, 42]
+
+
+def test_load_task_ids_from_file_raises_on_non_integer(tmp_path: pytest.TempPathFactory) -> None:
+    """load_task_ids_from_file raises ValueError for non-integer lines."""
+    f = tmp_path / "ids.txt"
+    f.write_text("4\nbad_line\n17\n")
+    with pytest.raises(ValueError, match="Cannot parse task ID"):
+        load_task_ids_from_file(str(f))
+
+
+def test_load_task_ids_from_file_raises_file_not_found() -> None:
+    """load_task_ids_from_file raises FileNotFoundError for missing files."""
+    with pytest.raises(FileNotFoundError):
+        load_task_ids_from_file("/nonexistent/path/ids.txt")
+
+
 # ── validate_args ─────────────────────────────────────────────────────────────
 
 
 def test_validate_args_rejects_negative_start() -> None:
     """validate_args must raise ValueError for negative --start."""
-    args = argparse.Namespace(start=-1, end=5, concurrency=2)
+    args = argparse.Namespace(task_ids_file=None, start=-1, end=5, concurrency=2)
     with pytest.raises(ValueError, match="--start must be non-negative"):
         validate_args(args)
 
 
 def test_validate_args_rejects_end_not_greater_than_start() -> None:
     """validate_args must raise ValueError when --end <= --start."""
-    args = argparse.Namespace(start=5, end=5, concurrency=2)
+    args = argparse.Namespace(task_ids_file=None, start=5, end=5, concurrency=2)
     with pytest.raises(ValueError, match="--end must be greater than --start"):
         validate_args(args)
 
 
 def test_validate_args_rejects_zero_concurrency() -> None:
     """validate_args must raise ValueError for --concurrency <= 0."""
-    args = argparse.Namespace(start=0, end=5, concurrency=0)
+    args = argparse.Namespace(task_ids_file=None, start=0, end=5, concurrency=0)
     with pytest.raises(ValueError, match="--concurrency must be positive"):
         validate_args(args)
+
+
+def test_validate_args_rejects_mixing_task_ids_file_with_start() -> None:
+    """validate_args must raise ValueError when --task_ids_file and --start are both set."""
+    args = argparse.Namespace(task_ids_file="ids.txt", start=0, end=None, concurrency=1)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        validate_args(args)
+
+
+def test_validate_args_rejects_mixing_task_ids_file_with_end() -> None:
+    """validate_args must raise ValueError when --task_ids_file and --end are both set."""
+    args = argparse.Namespace(task_ids_file="ids.txt", start=None, end=10, concurrency=1)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        validate_args(args)
+
+
+def test_validate_args_rejects_neither_source_provided() -> None:
+    """validate_args must raise ValueError when neither --task_ids_file nor --start/--end is given."""
+    args = argparse.Namespace(task_ids_file=None, start=None, end=None, concurrency=1)
+    with pytest.raises(ValueError, match="Either --task_ids_file or both --start and --end"):
+        validate_args(args)
+
+
+def test_validate_args_accepts_valid_range() -> None:
+    """validate_args must not raise for a valid range."""
+    args = argparse.Namespace(task_ids_file=None, start=0, end=10, concurrency=4)
+    validate_args(args)  # should not raise
+
+
+def test_validate_args_accepts_task_ids_file() -> None:
+    """validate_args must not raise when only --task_ids_file is given."""
+    args = argparse.Namespace(task_ids_file="ids.txt", start=None, end=None, concurrency=2)
+    validate_args(args)  # should not raise

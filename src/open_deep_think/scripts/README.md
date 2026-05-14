@@ -36,29 +36,21 @@ python -m open_deep_think.scripts.parallel_solve \
 
 # IMO25 script
 ```bash
-python -m open_deep_think.scripts.parallel_solve \
-  --script imo25 \
-  --start 0 --end 400 \
-  --concurrency 20 \
-  --model openai/gpt-oss-120b  \
-  --temperature 0.6 \
-  --top_p 0.95 \
-  --output_path ../data
-  --run_name full_run
+bash exps/run_subset_imo25_gpt_oss.sh 
+```
+
+```bash
+bash exps/run_full_imo25_gpt_oss.sh 
 ```
 
 # Tournament script
+
 ```bash
-python -m open_deep_think.scripts.parallel_solve \
-  --script tournament_merge_improve \
-  --num_solutions 8 \
-  --start 0 --end 400 \
-  --concurrency 20 \
-  --model openai/gpt-oss-120b  \
-  --temperature 0.6 \
-  --top_p 0.95 \
-  --output_path ../data \
-  --run_name full_run
+bash exps/run_subset_tournament_gpt_oss.sh 
+```
+
+```bash
+bash exps/run_full_tournament_gpt_oss.sh 
 ```
 
 

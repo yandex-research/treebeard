@@ -694,7 +694,7 @@ def main() -> None:
     verifier_model = args.verifier_model or solver_model
     classifier_model = args.classifier_model or verifier_model
 
-    run_dir = Path(args.output_path) / "imo25" / sanitize_model_name(solver_model) / args.run_name
+    run_dir = Path(args.output_path) / args.run_name
     run_dir.mkdir(parents=True, exist_ok=True)
 
     configure_logging()
