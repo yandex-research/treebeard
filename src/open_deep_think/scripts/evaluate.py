@@ -19,7 +19,7 @@ from tqdm import tqdm
 
 from open_deep_think.imo_answer_bench.extract import extract_boxed_answer
 from open_deep_think.imo_answer_bench.judge import judge_answer
-from open_deep_think.imo_answer_bench.templates import JUDGE_PROMPT_TEMPLATE
+from open_deep_think.imo_answer_bench.templates import JudgeType
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -53,17 +53,21 @@ def load_solutions(solutions_dir: Path) -> dict[str, str]:
 
 def evaluate_solutions(
     solutions_dir: str,
-    judge_prompt_template: str = JUDGE_PROMPT_TEMPLATE,
-    judge_model_name: str = "gemini-3-flash",
+    dataset_name: str,
+    dataset_split: str,
+    judge_type: JudgeType,
+    judge_model_name: str = "gemini-3.1-pro-preview",
     max_tokens: int = 2048,
 ) -> dict[str, Any]:
     """Evaluate all solutions against the IMO AnswerBench dataset.
 
     Args:
-        solutions_dir: Path to directory containing solution files
-        judge_prompt_template: Template for the judge prompt
-        judge_model_name: Name of the judge model (e.g., "gemini-3-flash")
-        max_tokens: Maximum tokens for judge responses
+        solutions_dir: Path to directory containing solution files.
+        dataset_name: Hugging Face dataset name.
+        dataset_split: Hugging Face dataset split.
+        judge_type: Whether to judge an answer or a proof.
+        judge_model_name: Name of the judge model (e.g., "gemini-3-flash").
+        max_tokens: Maximum tokens for judge responses.
 
     Returns:
         Dictionary containing evaluation results
@@ -81,8 +85,8 @@ def evaluate_solutions(
     logger.info("Found %s solution files", len(solutions))
 
     # Load dataset
-    logger.info("Loading IMO AnswerBench dataset...")
-    dataset = load_dataset("Hwilner/imo-answerbench", split="train")
+    logger.info("Loading dataset...")
+    dataset = load_dataset(dataset_name, split=dataset_split)
     logger.info("Loaded %s problems from dataset", len(dataset))
     logger.info("Using judge model: %s", judge_model_name)
 
@@ -95,7 +99,13 @@ def evaluate_solutions(
 
     for idx, problem in enumerate(pbar):
         task_id = str(idx)  # Assuming task_id corresponds to dataset index
-        ground_truth = problem["Short Answer"]
+        guidelines = None
+        if judge_type == JudgeType.ANSWER:
+            ground_truth = problem["Short Answer"]
+        elif judge_type == JudgeType.PROOF:
+            ground_truth = problem["Solution"]
+            guidelines = problem["Grading guidelines"]
+
         problem_statement = problem.get("Problem", "")  # Get problem statement
 
         result_entry = {
@@ -130,9 +140,8 @@ def evaluate_solutions(
         # Judge the answer using the full solution text
         results["total"] += 1
         is_correct, judge_response = judge_answer(
-            problem_statement, solution_text, ground_truth, judge_model_name, judge_prompt_template, max_tokens
+            problem_statement, solution_text, ground_truth, judge_model_name, judge_type, guidelines, max_tokens
         )
-
         result_entry["is_correct"] = is_correct
         result_entry["judge_response"] = judge_response
 
@@ -175,7 +184,15 @@ def main() -> None:
         default="google/gemini-3.1-pro-preview",
         help="Judge model name",
     )
+    parser.add_argument(
+        "--judge_type",
+        type=JudgeType,
+        default="answer",
+        help="Judge type (answer or proof)",
+    )
     parser.add_argument("--max_tokens", type=int, default=2048, help="Maximum tokens for judge responses")
+    parser.add_argument("--dataset_name", type=str, default="Hwilner/imo-answerbench", help="Hugging Face dataset name")
+    parser.add_argument("--dataset_split", type=str, default="train", help="Hugging Face dataset split")
 
     args = parser.parse_args()
 
@@ -190,8 +207,10 @@ def main() -> None:
 
     results = evaluate_solutions(
         solutions_dir=args.solutions_dir,
-        judge_prompt_template=JUDGE_PROMPT_TEMPLATE,
+        dataset_name=args.dataset_name,
+        dataset_split=args.dataset_split,
         judge_model_name=args.judge_model,
+        judge_type=args.judge_type,
         max_tokens=args.max_tokens,
     )
 

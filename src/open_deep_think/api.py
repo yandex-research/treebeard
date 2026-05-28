@@ -2,16 +2,28 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import time
 from typing import TYPE_CHECKING, Any
 
-from openai import OpenAI
+from openai import APIConnectionError, APIStatusError, OpenAI
 
 if TYPE_CHECKING:
     from openai.types.chat import ChatCompletion
 
-# Default timeout for API requests (seconds)
-_REQUEST_TIMEOUT = 1800
+logger = logging.getLogger(__name__)
+
+# timeout for API requests (seconds)
+_REQUEST_TIMEOUT = 3600
+_MAX_RETRIES = 10
+_INITIAL_BACKOFF = 0.5
+_BACKOFF_FACTOR = 1.5
+# BadRequestError (400) doesn't necessarily mean bad input
+# in some APIs it happens when you exceed rate limit too much
+# so we want to retry it too
+# in cases of actual bad input it will fail after exhausting all retries
+_NON_RETRYABLE_STATUS_CODES = {401, 404, 409, 422}
 
 
 def _build_client() -> OpenAI:
@@ -61,13 +73,37 @@ def chat_api_call(
 
     """
     client = _build_client()
-    return client.chat.completions.create(
-        model=model,
-        messages=list(messages),
-        max_tokens=max_tokens,
-        temperature=temperature,
-        top_p=top_p,
-    )
+    extra_body = {}
+
+    if "gpt" in model:
+        extra_body["reasoning"] = {
+            "effort": "xhigh"
+        }
+
+    backoff = _INITIAL_BACKOFF
+    for attempt in range(1, _MAX_RETRIES + 1):
+        try:
+            return client.chat.completions.create(
+                model=model,
+                messages=list(messages),
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                extra_body=extra_body,
+            )
+        except APIConnectionError:
+            if attempt == _MAX_RETRIES:
+                raise
+            logger.warning("Connection error (attempt %d/%d), retrying in %.1fs…", attempt, _MAX_RETRIES, backoff)
+        except APIStatusError as exc:
+            if exc.status_code in _NON_RETRYABLE_STATUS_CODES or attempt == _MAX_RETRIES:
+                raise
+            logger.warning(
+                "API error %d (attempt %d/%d), retrying in %.1fs…",
+                exc.status_code, attempt, _MAX_RETRIES, backoff,
+            )
+        time.sleep(backoff)
+        backoff *= _BACKOFF_FACTOR
 
 
 def single_turn_api_call(

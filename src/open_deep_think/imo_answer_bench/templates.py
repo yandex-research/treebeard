@@ -1,6 +1,10 @@
 """Prompt templates and prompt-building helpers for IMO AnswerBench."""
 
+import enum
+from typing import Optional
+
 PROBLEM_PROMPT_PREFIX = "Please reason step by step, and put your final answer within \\boxed{}."
+
 """Prefix instruction used when asking a model to solve a benchmark problem."""
 
 
@@ -19,7 +23,7 @@ def build_problem_prompt(problem: str, prefix: str = PROBLEM_PROMPT_PREFIX) -> s
     return f"{prefix}\n\n{problem}"
 
 
-JUDGE_PROMPT_TEMPLATE = """# System Role: Deterministic Mathematical Autograder
+ANSWER_JUDGE_PROMPT_TEMPLATE = """# System Role: Deterministic Mathematical Autograder
 You are a precise, automated grading system. Your sole function is to determine if the final answer provided in the Model Solution is mathematically equivalent to the Golden Answer. You must NOT grade the reasoning or steps, only the final result.
 
 # 1. Grading Guidelines (Equivalence Rules)
@@ -66,29 +70,97 @@ Golden Answer: {{Golden_Answer}}
 
 """
 
+PROOF_JUDGE_PROMPT_TEMPLATE = """
+You are an expert grader for the International Mathematics Olympiad (IMO). Your task is to evaluate a proposed solution strictly and rigorously. Keep in mind the standards at the IMO are extremely high: only arguments that are logically sound, complete, and precise should be rewarded.
+
+### General Scoring Rubric
+Scores are assigned on a 0-7 scale. The general guidelines are:
+* **7 Points (Correct):** The solution is complete, correct, and fully rigorous. If the submission contains incorrect attempts or lines of reasoning but ultimately presents a complete and correct solution, it should still be awarded full points; the presence of earlier, discarded work does not detract from the final correct proof.
+
+* **6 Points (Almost Correct):** The solution is almost correct with a sound core argument, but contains minor errors in calculation or small gaps in logic. Missing proofs for major components, unjustified claims, or sketchy arguments are **not** eligible for 6 points.
+
+* **1 Point (Partial Progress):** The solution demonstrates substantial progress explicitly mentioned in the grading guidelines. Initial observations, reformulating the problem without making substantive headway, or proving partial results not mentioned in the grading guidelines are generally **not** eligible for this score.
+
+* **0 Points (Incorrect):** The solution does not make substantial progress that is a key step in the full solution or is fundamentally flawed. All partial progress without key results or lacking rigor also fall in this category.
+
+### Input Data and Interpretation
+You are provided with the following:
+1. **Problem Statement:** The IMO problem.
+
+2. **Ground Truth Solution:** A reference solution. Assume this solution is correct. It demonstrates one valid approach.
+
+3. **Specific Grading Guidelines:** Criteria for awarding credit for this specific problem. These guidelines take precedence over the General Scoring Rubric, especially for partial credit.
+
+4. **Proposed Solution:** The student submission.
+
+### Evaluation Process
+You must follow this structured process:
+1. **Analyze References:** Meticulously read and understand the problem and Ground Truth Solution check the Specific Grading Guidelines. Identify the key steps for a complete solution and the criteria for partial credit.
+
+2. **Step-by-Step Verification:** Verify the logical validity and rigor of every step. Identify all flaws, gaps, assumptions, and errors. **Make sure you fully understand every piece of logic behind each step of the proposed solution, you must be careful for solutions that `pretend` to be correct.**
+
+3. **Assess Progress:** Determine the extent of non-trivial progress made.
+
+4. **Score Determination:** Compare the findings against the Specific Grading Guidelines and the General Rubric to determine the final score.
+
+### Output Requirements
+You must provide your final score in the format <points>N out of 7</points>. Ensure the `<points>` block is used **only once**, as your answer will be parsed based on the first <points> </points> block that appears in your whole response.
+
+**PROBLEM STATEMENT**
+{{Problem_Statement}}
+
+**GROUND-TRUTH SOLUTION**
+{{Golden_Answer}}
+
+**SPECIFIC GRADING GUIDELINES**
+{{Guidelines}}
+
+**PROPOSED SOLUTION**
+{{Model_Solution}}
+
+Present your detailed thought process and formal justification based on the scoring rubric and grading guidelines, and finally present your final score in the format below.
+[Select one of the following options]
+<points>7 out of 7</points>
+<points>6 out of 7</points>
+<points>1 out of 7</points>
+<points>0 out of 7</points>
+"""
+
+
+class JudgeType(enum.Enum):
+    ANSWER = "answer"
+    PROOF = "proof"
 
 def build_judge_prompt(
+    judge_type: JudgeType,
     problem_statement: str,
     model_solution: str,
     golden_answer: str,
-    template: str = JUDGE_PROMPT_TEMPLATE,
+    guidelines: Optional[str] = None,
+
 ) -> str:
     """Build a deterministic judge prompt by filling template placeholders.
 
     Args:
+        judge_type: Whether to judge an answer or a proof.
         problem_statement: Original problem statement.
         model_solution: Model-produced solution text to grade.
         golden_answer: Ground-truth short answer.
-        template: Prompt template that includes standard placeholders.
+        guidelines: Grading guidelines for proof judging.
 
     Returns:
         Rendered prompt string for the judge model.
 
     """
-    prompt = template.replace("{{Problem_Statement}}", problem_statement)
+    if judge_type == JudgeType.ANSWER:
+        prompt = ANSWER_JUDGE_PROMPT_TEMPLATE
+    elif judge_type == JudgeType.PROOF:
+        prompt = PROOF_JUDGE_PROMPT_TEMPLATE
+        prompt = prompt.replace("{{Guidelines}}", guidelines)
+    prompt = prompt.replace("{{Problem_Statement}}", problem_statement)
     prompt = prompt.replace("{{Model_Solution}}", model_solution)
-    return prompt.replace("{{Golden_Answer}}", golden_answer)
 
+    return prompt.replace("{{Golden_Answer}}", golden_answer)
 
 ###### Prompts from Huang et al. #######
 

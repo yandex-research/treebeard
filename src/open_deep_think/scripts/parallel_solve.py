@@ -65,18 +65,23 @@ def add_optional_arg(command: list[str], flag: str, value: str | float | None) -
     command.extend([flag, str(value)])
 
 
+def _append_common_args(command: list[str], args: argparse.Namespace, base_run_name: str, slot: TaskSlot) -> None:
+    """Append args shared by all child scripts (run name, shard index, sampling, dataset)."""
+    command.extend(["--run_name", base_run_name, "--shard_index", str(slot.shard_index)])
+    add_optional_arg(command, "--temperature", args.temperature)
+    add_optional_arg(command, "--top_p", args.top_p)
+    add_optional_arg(command, "--dataset_name", args.dataset_name)
+    add_optional_arg(command, "--dataset_split", args.dataset_split)
+
+
 def _append_common_tournament_args(command: list[str], args: argparse.Namespace) -> None:
-    """Append shared tournament args (verifier, classifier, num_solutions, sampling, dataset)."""
+    """Append shared tournament args (verifier, classifier, num_solutions, prompts)."""
     add_optional_arg(command, "--verifier_model", args.verifier_model)
     add_optional_arg(command, "--classifier_model", args.classifier_model)
     add_optional_arg(command, "--solver_max_tokens", args.solver_max_tokens)
     add_optional_arg(command, "--verifier_max_tokens", args.verifier_max_tokens)
     add_optional_arg(command, "--classifier_max_tokens", args.classifier_max_tokens)
     add_optional_arg(command, "--num_solutions", args.num_solutions)
-    add_optional_arg(command, "--temperature", args.temperature)
-    add_optional_arg(command, "--top_p", args.top_p)
-    add_optional_arg(command, "--dataset_name", args.dataset_name)
-    add_optional_arg(command, "--dataset_split", args.dataset_split)
     for other_prompt in args.other_prompt:
         command.extend(["--other_prompt", other_prompt])
 
@@ -119,8 +124,9 @@ def build_child_command(args: argparse.Namespace, slot: TaskSlot, base_run_name:
         args.output_path,
     ]
 
+    _append_common_args(command, args, base_run_name, slot)
+
     if args.script == "imo25":
-        command.extend(["--run_name", base_run_name, "--shard_index", str(slot.shard_index)])
         add_optional_arg(command, "--verifier_model", args.verifier_model)
         add_optional_arg(command, "--classifier_model", args.classifier_model)
         add_optional_arg(command, "--solver_max_tokens", args.solver_max_tokens)
@@ -130,26 +136,18 @@ def build_child_command(args: argparse.Namespace, slot: TaskSlot, base_run_name:
         add_optional_arg(command, "--max_iterations", args.max_iterations)
         add_optional_arg(command, "--required_consecutive_passes", args.required_consecutive_passes)
         add_optional_arg(command, "--max_consecutive_failures", args.max_consecutive_failures)
-        add_optional_arg(command, "--temperature", args.temperature)
-        add_optional_arg(command, "--top_p", args.top_p)
-        add_optional_arg(command, "--dataset_name", args.dataset_name)
-        add_optional_arg(command, "--dataset_split", args.dataset_split)
         for other_prompt in args.other_prompt:
             command.extend(["--other_prompt", other_prompt])
     elif args.script == "simple_tournament":
-        command.extend(["--run_name", base_run_name, "--shard_index", str(slot.shard_index)])
         _append_common_tournament_args(command, args)
         add_optional_arg(command, "--judge_model", args.judge_model)
         add_optional_arg(command, "--judge_max_tokens", args.judge_max_tokens)
     elif args.script in {"tournament_merge", "tournament_merge_improve"}:
-        command.extend(["--run_name", base_run_name, "--shard_index", str(slot.shard_index)])
         _append_common_tournament_args(command, args)
         add_optional_arg(command, "--merger_model", args.merger_model)
         add_optional_arg(command, "--merger_max_tokens", args.merger_max_tokens)
     else:
         add_optional_arg(command, "--max_tokens", args.baseline_max_tokens)
-        add_optional_arg(command, "--temperature", args.temperature)
-        add_optional_arg(command, "--top_p", args.top_p)
     return command
 
 
@@ -294,8 +292,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max_consecutive_failures", type=int)
     parser.add_argument("--temperature", type=float)
     parser.add_argument("--top_p", type=float)
-    parser.add_argument("--dataset_name", type=str)
-    parser.add_argument("--dataset_split", type=str)
+    parser.add_argument(
+        "--dataset_name",
+        type=str,
+        default="Hwilner/imo-answerbench",
+        help="Hugging Face dataset name",
+    )
+    parser.add_argument(
+        "--dataset_split",
+        type=str,
+        default="train",
+    )
     parser.add_argument(
         "--other_prompt",
         action="append",

@@ -142,6 +142,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, help="Sampling temperature")
     parser.add_argument("--top_p", type=float, help="Nucleus sampling top_p")
     parser.add_argument("--output_path", type=str, help="Output directory path")
+    parser.add_argument("--run_name", type=str, default=None, help="Run name subdirectory")
+    parser.add_argument("--shard_index", type=int, default=0, help="Zero-based shard index; only shard 0 writes config.json")
+    parser.add_argument("--dataset_name", type=str, help="Hugging face dataset name")
+    parser.add_argument("--dataset_split", type=str, help="Hugging face dataset split")
     return parser.parse_args()
 
 
@@ -150,7 +154,8 @@ def main() -> None:
     args = parse_args()
 
     model_name = args.model.split("/")[-1]
-    output_path = f"{args.output_path}/baseline/{model_name}"
+    base = Path(args.output_path) / "baseline" / model_name
+    output_path = str(base / args.run_name) if args.run_name else str(base)
 
     # Configure logging
     log_dir = Path(f"../logs/baseline/{model_name}")
@@ -167,9 +172,33 @@ def main() -> None:
         ],
     )
 
-    # Load dataset
+    output_dir = Path(output_path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if args.shard_index == 0:
+        config = {
+            "model": args.model,
+            "max_tokens": args.max_tokens,
+            "temperature": args.temperature,
+            "top_p": args.top_p,
+            "dataset_name": args.dataset_name,
+            "dataset_split": args.dataset_split,
+            "run_name": args.run_name,
+        }
+        config_path = output_dir / "config.json"
+        normalised = json.loads(json.dumps(config))
+        if config_path.exists():
+            existing = json.loads(config_path.read_text(encoding="utf-8"))
+            if existing != normalised:
+                msg = f"Config mismatch in {config_path}.\nExisting: {existing}\nCurrent:  {normalised}"
+                raise ValueError(msg)
+            logger.info("Config matches existing %s — no rewrite needed.", config_path)
+        else:
+            with config_path.open("w", encoding="utf-8") as f:
+                json.dump(normalised, f, indent=2, ensure_ascii=False)
+            logger.info("Config written to %s", config_path)
+
     logger.info("Loading dataset")
-    dataset = load_dataset("Hwilner/imo-answerbench", split="train")
+    dataset = load_dataset(args.dataset_name, split=args.dataset_split)
 
     # Process tasks in range
     logger.info("Processing tasks %s to %s", args.start, args.end - 1)

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from openai.types.chat import ChatCompletion
 
 from open_deep_think.imo_answer_bench import judge
+from open_deep_think.imo_answer_bench.templates import JudgeType
 
 if TYPE_CHECKING:
     import pytest
@@ -41,7 +42,7 @@ def test_judge_answer_strips_thinking_before_parsing_boxed(
     completion = _completion_with_content(r"<thinking>analysis</thinking> final \\boxed{Correct}")
     monkeypatch.setattr(judge, "single_turn_api_call", lambda **_: completion)
 
-    is_correct, response_text = judge.judge_answer("p", "s", "g", "m")
+    is_correct, response_text = judge.judge_answer("p", "s", "g", "m", judge_type=JudgeType.ANSWER)
     assert is_correct is True
     assert "Correct" in response_text
 
@@ -51,7 +52,7 @@ def test_judge_answer_uses_last_boxed(monkeypatch: pytest.MonkeyPatch) -> None:
     completion = _completion_with_content(r"\\boxed{Incorrect} then \\boxed{Correct}")
     monkeypatch.setattr(judge, "single_turn_api_call", lambda **_: completion)
 
-    is_correct, response_text = judge.judge_answer("p", "s", "g", "m")
+    is_correct, response_text = judge.judge_answer("p", "s", "g", "m", judge_type=JudgeType.ANSWER)
     assert is_correct is True
     assert "Correct" in response_text
 
@@ -61,7 +62,7 @@ def test_judge_answer_ignores_boxed_inside_thinking(monkeypatch: pytest.MonkeyPa
     completion = _completion_with_content(r"<thinking>\\boxed{Correct}</thinking> final \\boxed{Incorrect}")
     monkeypatch.setattr(judge, "single_turn_api_call", lambda **_: completion)
 
-    is_correct, response_text = judge.judge_answer("p", "s", "g", "m")
+    is_correct, response_text = judge.judge_answer("p", "s", "g", "m", judge_type=JudgeType.ANSWER)
     assert is_correct is False
     assert "Incorrect" in response_text
 
@@ -79,7 +80,7 @@ def test_judge_answer_returns_false_on_empty_choices(monkeypatch: pytest.MonkeyP
     )
     monkeypatch.setattr(judge, "single_turn_api_call", lambda **_: empty_completion)
 
-    is_correct, response_text = judge.judge_answer("p", "s", "g", "m")
+    is_correct, response_text = judge.judge_answer("p", "s", "g", "m", judge_type=JudgeType.ANSWER)
     assert is_correct is False
     assert response_text == ""
 
@@ -89,7 +90,7 @@ def test_judge_answer_fallback_when_no_boxed(monkeypatch: pytest.MonkeyPatch) ->
     completion = _completion_with_content("The answer is correct based on my analysis.")
     monkeypatch.setattr(judge, "single_turn_api_call", lambda **_: completion)
 
-    is_correct, response_text = judge.judge_answer("p", "s", "g", "m")
+    is_correct, response_text = judge.judge_answer("p", "s", "g", "m", judge_type=JudgeType.ANSWER)
     assert is_correct is True
     assert "correct" in response_text.lower()
 
@@ -99,6 +100,6 @@ def test_judge_answer_fallback_incorrect_when_no_boxed(monkeypatch: pytest.Monke
     completion = _completion_with_content("The answer is incorrect.")
     monkeypatch.setattr(judge, "single_turn_api_call", lambda **_: completion)
 
-    is_correct, response_text = judge.judge_answer("p", "s", "g", "m")
+    is_correct, response_text = judge.judge_answer("p", "s", "g", "m", judge_type=JudgeType.ANSWER)
     assert is_correct is False
     assert "incorrect" in response_text.lower()

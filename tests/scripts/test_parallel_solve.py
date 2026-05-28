@@ -162,9 +162,10 @@ def test_build_child_command_baseline_uses_baseline_module_and_max_tokens() -> N
     assert "1.0" in command
     assert "--top_p" in command
     assert "0.95" in command
-    # baseline does not use run_name / shard_index
-    assert "--run_name" not in command
-    assert "--shard_index" not in command
+    assert "--run_name" in command
+    assert "r" in command
+    assert "--shard_index" in command
+    assert "2" in command
 
 
 def test_build_child_command_tournament_uses_tournament_module_and_args() -> None:
