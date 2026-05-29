@@ -104,6 +104,8 @@ def chat_api_call(
             )
         time.sleep(backoff)
         backoff *= _BACKOFF_FACTOR
+    msg = "All retries exhausted"
+    raise RuntimeError(msg)
 
 
 def single_turn_api_call(

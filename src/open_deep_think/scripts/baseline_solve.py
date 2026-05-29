@@ -143,7 +143,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top_p", type=float, help="Nucleus sampling top_p")
     parser.add_argument("--output_path", type=str, help="Output directory path")
     parser.add_argument("--run_name", type=str, default=None, help="Run name subdirectory")
-    parser.add_argument("--shard_index", type=int, default=0, help="Zero-based shard index; only shard 0 writes config.json")
+    parser.add_argument(
+        "--shard_index",
+        type=int,
+        default=0,
+        help="Zero-based shard index; only shard 0 writes config.json",
+    )
     parser.add_argument("--dataset_name", type=str, help="Hugging face dataset name")
     parser.add_argument("--dataset_split", type=str, help="Hugging face dataset split")
     return parser.parse_args()

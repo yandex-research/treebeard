@@ -51,7 +51,7 @@ def load_solutions(solutions_dir: Path) -> dict[str, str]:
     return solutions
 
 
-def evaluate_solutions(
+def evaluate_solutions(  # noqa: PLR0913
     solutions_dir: str,
     dataset_name: str,
     dataset_split: str,
@@ -191,7 +191,12 @@ def main() -> None:
         help="Judge type (answer or proof)",
     )
     parser.add_argument("--max_tokens", type=int, default=2048, help="Maximum tokens for judge responses")
-    parser.add_argument("--dataset_name", type=str, default="Hwilner/imo-answerbench", help="Hugging Face dataset name")
+    parser.add_argument(
+        "--dataset_name",
+        type=str,
+        default="Hwilner/imo-answerbench",
+        help="Hugging Face dataset name",
+    )
     parser.add_argument("--dataset_split", type=str, default="train", help="Hugging Face dataset split")
 
     args = parser.parse_args()

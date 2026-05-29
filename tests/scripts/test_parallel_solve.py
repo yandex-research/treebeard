@@ -315,9 +315,10 @@ def test_build_task_slots_from_ids_shard_indices_are_unique() -> None:
 
 def test_build_task_slots_from_ids_single_id() -> None:
     """A single-ID list produces one slot with shard_index=0."""
-    slots = build_task_slots_from_ids([99])
+    task_id = 99
+    slots = build_task_slots_from_ids([task_id])
     assert len(slots) == 1
-    assert slots[0].task_index == 99
+    assert slots[0].task_index == task_id
     assert slots[0].shard_index == 0
 
 

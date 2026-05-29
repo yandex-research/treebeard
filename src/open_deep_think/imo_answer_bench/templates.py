@@ -1,7 +1,8 @@
 """Prompt templates and prompt-building helpers for IMO AnswerBench."""
 
+from __future__ import annotations
+
 import enum
-from typing import Optional
 
 PROBLEM_PROMPT_PREFIX = "Please reason step by step, and put your final answer within \\boxed{}."
 
@@ -128,6 +129,8 @@ Present your detailed thought process and formal justification based on the scor
 
 
 class JudgeType(enum.Enum):
+    """Enum representing the type of judging to perform."""
+
     ANSWER = "answer"
     PROOF = "proof"
 
@@ -136,7 +139,7 @@ def build_judge_prompt(
     problem_statement: str,
     model_solution: str,
     golden_answer: str,
-    guidelines: Optional[str] = None,
+    guidelines: str | None = None,
 
 ) -> str:
     """Build a deterministic judge prompt by filling template placeholders.
