@@ -22,7 +22,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/dvmazur/open-deep-think.git
+git clone https://github.com/yandex-research/open-deep-think.git
 cd open-deep-think
 ```
 

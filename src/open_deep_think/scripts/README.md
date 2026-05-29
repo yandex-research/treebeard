@@ -4,7 +4,7 @@ This folder contains CLI scripts for generating and evaluating IMO AnswerBench s
 
 ## Configuration
 
-Set up your OpenRouter API credentials as environment variables:
+Set up your API credentials as environment variables:
 
 ```bash
 export API_KEY="your-api-key-here"

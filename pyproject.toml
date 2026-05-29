@@ -3,7 +3,7 @@ name = "open-deep-think"
 version = "0.1.0"
 description = "Open Deep Think project"
 authors = [
-    { name = "dvmazur" }
+    { name = "yandex-research" }
 ]
 readme = "README.md"
 requires-python = ">=3.9"
