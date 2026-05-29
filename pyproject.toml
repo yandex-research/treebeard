@@ -13,6 +13,14 @@ dependencies = [
     "requests==2.32.5"
 ]
 
+[project.optional-dependencies]
+viewer = [
+    "streamlit>=1.31.0",
+]
+
+[project.scripts]
+odt-viewer = "open_deep_think.viewer.cli:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -31,7 +39,7 @@ ignore = [
     "COM812", # Conflicts with formatter
     "ISC001", # Conflicts with formatter
 ]
-per-file-ignores = { "src/open_deep_think/imo_answer_bench/templates.py" = ["E501"], "tests/**/*.py" = ["D100", "D101", "D102", "D103", "D104", "S101"] }
+per-file-ignores = { "src/open_deep_think/imo_answer_bench/templates.py" = ["E501"], "src/open_deep_think/viewer/app.py" = ["E501"], "tests/**/*.py" = ["D100", "D101", "D102", "D103", "D104", "S101"] }
 
 [tool.ruff.format]
 quote-style = "double"
