@@ -1,8 +1,7 @@
 """Judge model answers against ground truth using an API-based judge."""
 
-from __future__ import annotations
-
 import re
+from typing import Optional, Union
 
 from open_deep_think.api import single_turn_api_call
 from open_deep_think.imo_answer_bench.templates import JudgeType, build_judge_prompt
@@ -19,9 +18,9 @@ def judge_answer(  # noqa: PLR0913
     ground_truth: str,
     judge_model_name: str,
     judge_type: JudgeType,
-    guidelines: str | None = None,
+    guidelines: Optional[str] = None,
     max_tokens: int = 2048,
-) -> tuple[bool, str]:
+) -> tuple[Union[bool | int], str]:
     """Use the API-based judge model to compare model solution with ground truth.
 
     Args:
@@ -73,10 +72,13 @@ def judge_answer(  # noqa: PLR0913
                 return verdict == "correct", response_text
             return "correct" in response_text.lower() and "incorrect" not in response_text.lower(), response_text
         if judge_type == JudgeType.PROOF:
-            lower = response_text.lower()
-            if "<points>7 out of 7</points>" in lower or "<points>6 out of 7</points>" in lower:
-                return True, response_text
-            return False, response_text
+            if "<points>7 out of 7</points>" in response_text.lower():
+                return 7, response_text
+            if "<points>6 out of 7</points>" in response_text.lower():
+                return 6, response_text
+            if "<points>1 out of 7</points>" in response_text.lower():
+                return 1, response_text
+            return 0, response_text
         # Fallback: check if "correct" appears in the response
 
     except (KeyError, TypeError, ValueError, OSError):
