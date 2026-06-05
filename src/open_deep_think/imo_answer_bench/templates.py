@@ -134,13 +134,13 @@ class JudgeType(enum.Enum):
     ANSWER = "answer"
     PROOF = "proof"
 
+
 def build_judge_prompt(
     judge_type: JudgeType,
     problem_statement: str,
     model_solution: str,
     golden_answer: str,
     guidelines: str | None = None,
-
 ) -> str:
     """Build a deterministic judge prompt by filling template placeholders.
 
@@ -164,6 +164,7 @@ def build_judge_prompt(
     prompt = prompt.replace("{{Model_Solution}}", model_solution)
 
     return prompt.replace("{{Golden_Answer}}", golden_answer)
+
 
 ###### Prompts from Huang et al. #######
 

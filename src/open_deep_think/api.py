@@ -75,10 +75,7 @@ def chat_api_call(
     client = _build_client()
     extra_body = {}
 
-    if "gpt" in model:
-        extra_body["reasoning"] = {
-            "effort": "xhigh"
-        }
+    extra_body["reasoning_effort"] = "high"
 
     backoff = _INITIAL_BACKOFF
     for attempt in range(1, _MAX_RETRIES + 1):
@@ -100,7 +97,10 @@ def chat_api_call(
                 raise
             logger.warning(
                 "API error %d (attempt %d/%d), retrying in %.1fs…",
-                exc.status_code, attempt, _MAX_RETRIES, backoff,
+                exc.status_code,
+                attempt,
+                _MAX_RETRIES,
+                backoff,
             )
         time.sleep(backoff)
         backoff *= _BACKOFF_FACTOR
