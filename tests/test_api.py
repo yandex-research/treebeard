@@ -55,7 +55,7 @@ def test_single_turn_api_call_passes_default_sampling_params(
             "max_tokens": 32,
             "temperature": None,
             "top_p": None,
-            "extra_body": {},
+            "extra_body": {"reasoning_effort": "high"},
         },
     ]
 
@@ -118,6 +118,6 @@ def test_chat_api_call_passes_messages_and_model(monkeypatch: pytest.MonkeyPatch
             "max_tokens": 16,
             "temperature": None,
             "top_p": None,
-            "extra_body": {},
+            "extra_body": {"reasoning_effort": "high"},
         }
     ]
