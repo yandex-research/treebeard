@@ -146,6 +146,8 @@ def build_child_command(args: argparse.Namespace, slot: TaskSlot, base_run_name:
         _append_common_tournament_args(command, args)
         add_optional_arg(command, "--merger_model", args.merger_model)
         add_optional_arg(command, "--merger_max_tokens", args.merger_max_tokens)
+        if args.script == "tournament_merge_improve":
+            add_optional_arg(command, "--si_rounds", args.si_rounds)
     else:
         add_optional_arg(command, "--max_tokens", args.baseline_max_tokens)
     return command
@@ -316,6 +318,8 @@ def parse_args() -> argparse.Namespace:
     # Forwarded tournament_merge arguments.
     parser.add_argument("--merger_model", type=str, help="Forwarded as --merger_model for tournament_merge")
     parser.add_argument("--merger_max_tokens", type=int, help="Forwarded as --merger_max_tokens for tournament_merge")
+    # Forwarded tournament_merge_improve arguments.
+    parser.add_argument("--si_rounds", type=int, help="Forwarded as --si_rounds for tournament_merge_improve")
     # Forwarded baseline arguments.
     parser.add_argument("--baseline_max_tokens", type=int, help="Forwarded as --max_tokens for baseline_solve")
     return parser.parse_args()

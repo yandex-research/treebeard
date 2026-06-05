@@ -6,13 +6,17 @@ and verified, the solver is asked to self-improve the solution (using the
 IMO25 self-improvement prompt), and the improved solution is then re-verified
 before advancing to the next stage.
 
+The number of self-improvement rounds is configurable via ``--si_rounds``
+(default 1).  Each round runs: verify → (if failed) self-improve → re-verify.
+If verification passes at any point, remaining rounds are skipped.
+
 Pipeline overview:
 1. Generate N independent solutions (same first-iteration prompt as IMO25).
-2. For each candidate: verify → self-improve → verify.
+2. For each candidate: verify → [up to si_rounds of: self-improve → verify].
 3. Run ceil(log2(N)) tournament rounds:
    - Split the current pool into consecutive pairs.
    - For each pair, call the merger model to produce a combined solution.
-   - Verify the merged solution → self-improve → verify.
+   - Verify the merged solution → [up to si_rounds of: self-improve → verify].
    - The improved merged candidate advances to the next round.
 4. The last remaining (merged + improved) solution is the final answer.
 
@@ -75,6 +79,7 @@ class TournamentMergeImproveConfig:
     temperature: float | None
     top_p: float | None
     other_prompts: tuple[str, ...]
+    si_rounds: int = 1
 
 
 @dataclass(frozen=True)
@@ -434,8 +439,9 @@ def generate_candidate(
     The full per-candidate pipeline is:
     1. Generate initial solution.
     2. Verify.
-    3. If verification failed: self-improve → verify again.
-       If verification passed: skip self-improvement (solution is already correct).
+    3. For up to ``config.si_rounds`` rounds:
+       - If verification passed: stop early (solution is already correct).
+       - If verification failed: self-improve → verify again.
 
     Args:
         task_id: Identifier of the current task (for logging).
@@ -467,7 +473,7 @@ def generate_candidate(
         call_logger=call_logger,
     )
     # First verification pass.
-    first_verification = run_verification(
+    verification = run_verification(
         task_id=task_id,
         candidate_index=candidate_index,
         problem_statement=problem_statement,
@@ -475,33 +481,42 @@ def generate_candidate(
         config=config,
         call_logger=call_logger,
     )
-    if first_verification.is_pass:
+    current_text = result.text
+    current_completion = result.completion
+
+    for si_round in range(config.si_rounds):
+        if verification.is_pass:
+            LOGGER.info(
+                "Task %s candidate %s verification passed (SI round %s) — skipping remaining self-improvement",
+                task_id,
+                candidate_index,
+                si_round,
+            )
+            break
         LOGGER.info(
-            "Task %s candidate %s first verification passed — skipping self-improvement",
+            "Task %s candidate %s SI round %s/%s — verification failed, self-improving",
             task_id,
             candidate_index,
+            si_round + 1,
+            config.si_rounds,
         )
-        return Candidate(
-            index=candidate_index,
-            solution_text=result.text,
-            completion=result.completion,
-            verification=first_verification,
+        improved_result, verification = run_self_improvement(
+            task_id=task_id,
+            candidate_index=candidate_index,
+            problem_statement=problem_statement,
+            solution_text=current_text,
+            config=config,
+            call_logger=call_logger,
+            round_index=None,
         )
-    # First verification failed — self-improve and re-verify.
-    improved_result, post_verification = run_self_improvement(
-        task_id=task_id,
-        candidate_index=candidate_index,
-        problem_statement=problem_statement,
-        solution_text=result.text,
-        config=config,
-        call_logger=call_logger,
-        round_index=None,
-    )
+        current_text = improved_result.text
+        current_completion = improved_result.completion
+
     return Candidate(
         index=candidate_index,
-        solution_text=improved_result.text,
-        completion=improved_result.completion,
-        verification=post_verification,
+        solution_text=current_text,
+        completion=current_completion,
+        verification=verification,
     )
 
 
@@ -519,9 +534,10 @@ def run_match(  # noqa: PLR0913
     """Run a single tournament-merge-improve match between two candidates.
 
     The merger model synthesises a new solution from both candidates and their
-    verification reports.  The merged solution is then verified; if verification
-    fails the solution is self-improved and re-verified before being returned.
-    If the first verification already passes, self-improvement is skipped.
+    verification reports.  The merged solution is then verified.  If verification
+    fails, up to ``config.si_rounds`` self-improvement rounds are attempted,
+    each followed by re-verification.  If any verification passes, the loop
+    exits early.
 
     Args:
         task_id: Identifier of the current task (for logging).
@@ -579,7 +595,7 @@ def run_match(  # noqa: PLR0913
         merged_index,
     )
     # First verification of the merged solution.
-    merged_verification = run_verification(
+    verification = run_verification(
         task_id=task_id,
         candidate_index=merged_index,
         problem_statement=problem_statement,
@@ -587,50 +603,54 @@ def run_match(  # noqa: PLR0913
         config=config,
         call_logger=call_logger,
     )
-    if merged_verification.is_pass:
+    current_text = merger_result.text
+    current_completion = merger_result.completion
+
+    for si_round in range(config.si_rounds):
+        if verification.is_pass:
+            LOGGER.info(
+                "Task %s round %s match %s: merged solution (index %s) verification passed"
+                " (SI round %s) — skipping remaining self-improvement",
+                task_id,
+                round_index,
+                match_index,
+                merged_index,
+                si_round,
+            )
+            break
         LOGGER.info(
-            "Task %s round %s match %s: merged solution (index %s) first verification passed"
-            " — skipping self-improvement",
+            "Task %s round %s match %s: SI round %s/%s — self-improving merged solution (index %s)",
             task_id,
             round_index,
             match_index,
+            si_round + 1,
+            config.si_rounds,
             merged_index,
         )
-        return Candidate(
-            index=merged_index,
-            solution_text=merger_result.text,
-            completion=merger_result.completion,
-            verification=merged_verification,
+        improved_result, verification = run_self_improvement(
+            task_id=task_id,
+            candidate_index=merged_index,
+            problem_statement=problem_statement,
+            solution_text=current_text,
+            config=config,
+            call_logger=call_logger,
+            round_index=round_index,
         )
-    # First verification failed — self-improve the merged solution and re-verify.
+        current_text = improved_result.text
+        current_completion = improved_result.completion
+
     LOGGER.info(
-        "Task %s round %s match %s: self-improving merged solution (index %s)",
+        "Task %s round %s match %s: final merged solution verification=%s",
         task_id,
         round_index,
         match_index,
-        merged_index,
-    )
-    improved_result, post_verification = run_self_improvement(
-        task_id=task_id,
-        candidate_index=merged_index,
-        problem_statement=problem_statement,
-        solution_text=merger_result.text,
-        config=config,
-        call_logger=call_logger,
-        round_index=round_index,
-    )
-    LOGGER.info(
-        "Task %s round %s match %s: improved merged solution verification=%s",
-        task_id,
-        round_index,
-        match_index,
-        "pass" if post_verification.is_pass else "fail",
+        "pass" if verification.is_pass else "fail",
     )
     return Candidate(
         index=merged_index,
-        solution_text=improved_result.text,
-        completion=improved_result.completion,
-        verification=post_verification,
+        solution_text=current_text,
+        completion=current_completion,
+        verification=verification,
     )
 
 
@@ -1024,6 +1044,12 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Zero-based shard index; only shard 0 writes config.json (default: 0)",
     )
+    parser.add_argument(
+        "--si_rounds",
+        type=int,
+        default=1,
+        help="Maximum number of self-improvement rounds per verification failure (default: 1)",
+    )
     return parser.parse_args()
 
 
@@ -1081,6 +1107,9 @@ def main() -> None:
     if not is_power_of_two(args.num_solutions):
         msg = f"--num_solutions must be a power of 2, got {args.num_solutions}"
         raise ValueError(msg)
+    if args.si_rounds < 1:
+        msg = f"--si_rounds must be >= 1, got {args.si_rounds}"
+        raise ValueError(msg)
 
     solver_model = args.model
     verifier_model = args.verifier_model or solver_model
@@ -1112,6 +1141,7 @@ def main() -> None:
         temperature=args.temperature,
         top_p=args.top_p,
         other_prompts=tuple(args.other_prompt),
+        si_rounds=args.si_rounds,
     )
     write_config_if_shard_zero(run_dir, asdict(config), args.shard_index)
 

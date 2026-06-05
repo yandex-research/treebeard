@@ -46,6 +46,8 @@ def _base_args() -> argparse.Namespace:
         # tournament_merge-specific
         merger_model=None,
         merger_max_tokens=None,
+        # tournament_merge_improve-specific
+        si_rounds=None,
     )
 
 

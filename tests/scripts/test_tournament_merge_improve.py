@@ -214,6 +214,27 @@ def test_tournament_merge_improve_config_fields() -> None:
     assert cfg.solver_model == "solver"
     assert cfg.merger_model == "merger"
     assert cfg.num_solutions == _NUM_SOLUTIONS
+    assert cfg.si_rounds == 1  # default
+
+
+def test_tournament_merge_improve_config_si_rounds_custom() -> None:
+    """TournamentMergeImproveConfig must accept a custom si_rounds value."""
+    cfg = TournamentMergeImproveConfig(
+        solver_model="s",
+        verifier_model="v",
+        classifier_model="c",
+        merger_model="m",
+        solver_max_tokens=100,
+        verifier_max_tokens=100,
+        classifier_max_tokens=100,
+        merger_max_tokens=100,
+        num_solutions=2,
+        temperature=None,
+        top_p=None,
+        other_prompts=(),
+        si_rounds=3,
+    )
+    assert cfg.si_rounds == 3
 
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
@@ -525,3 +546,217 @@ def test_write_config_if_shard_zero_raises_on_config_mismatch(tmp_path: Path) ->
     (tmp_path / "config.json").write_text(json.dumps(old_config), encoding="utf-8")
     with pytest.raises(ValueError, match="Config mismatch"):
         write_config_if_shard_zero(tmp_path, new_config, shard_index=0)
+
+
+# ── Multi-round self-improvement tests ────────────────────────────────────────
+
+
+def _make_config_with_si_rounds(si_rounds: int) -> TournamentMergeImproveConfig:
+    """Return a minimal TournamentMergeImproveConfig with custom si_rounds."""
+    return TournamentMergeImproveConfig(
+        solver_model="solver",
+        verifier_model="verifier",
+        classifier_model="classifier",
+        merger_model="merger",
+        solver_max_tokens=100,
+        verifier_max_tokens=100,
+        classifier_max_tokens=100,
+        merger_max_tokens=100,
+        num_solutions=2,
+        temperature=None,
+        top_p=None,
+        other_prompts=(),
+        si_rounds=si_rounds,
+    )
+
+
+def test_generate_candidate_multiple_si_rounds_stops_on_pass() -> None:
+    """generate_candidate with si_rounds=3 must stop after the first passing SI round."""
+    config = _make_config_with_si_rounds(si_rounds=3)
+
+    fake_initial = MagicMock()
+    fake_initial.text = "Initial solution."
+    fake_initial.completion = None
+    fake_initial.call_id = 1
+
+    fake_improved_1 = MagicMock()
+    fake_improved_1.text = "Improved round 1."
+    fake_improved_1.completion = None
+    fake_improved_1.call_id = 5
+
+    fail_verification = _make_verification(is_pass=False)
+    pass_verification = _make_verification(is_pass=True)
+    call_logger = MagicMock()
+
+    with (
+        patch(
+            "open_deep_think.scripts.tournament_merge_improve.call_model",
+            return_value=fake_initial,
+        ),
+        patch(
+            "open_deep_think.scripts.tournament_merge_improve.run_verification",
+            return_value=fail_verification,
+        ),
+        patch(
+            "open_deep_think.scripts.tournament_merge_improve.run_self_improvement",
+            return_value=(fake_improved_1, pass_verification),
+        ) as mock_improve,
+    ):
+        candidate = generate_candidate(
+            task_id=0,
+            candidate_index=0,
+            problem_statement="Solve x.",
+            config=config,
+            call_logger=call_logger,
+        )
+
+    # Only 1 SI round needed — the second round sees pass and breaks.
+    mock_improve.assert_called_once()
+    assert candidate.solution_text == "Improved round 1."
+    assert candidate.verification.is_pass is True
+
+
+def test_generate_candidate_exhausts_all_si_rounds_when_always_failing() -> None:
+    """generate_candidate with si_rounds=3 must run all 3 rounds when all verifications fail."""
+    config = _make_config_with_si_rounds(si_rounds=3)
+
+    fake_initial = MagicMock()
+    fake_initial.text = "Initial solution."
+    fake_initial.completion = None
+    fake_initial.call_id = 1
+
+    fake_improved = MagicMock()
+    fake_improved.text = "Still wrong."
+    fake_improved.completion = None
+    fake_improved.call_id = 10
+
+    fail_verification = _make_verification(is_pass=False)
+    call_logger = MagicMock()
+
+    with (
+        patch(
+            "open_deep_think.scripts.tournament_merge_improve.call_model",
+            return_value=fake_initial,
+        ),
+        patch(
+            "open_deep_think.scripts.tournament_merge_improve.run_verification",
+            return_value=fail_verification,
+        ),
+        patch(
+            "open_deep_think.scripts.tournament_merge_improve.run_self_improvement",
+            return_value=(fake_improved, fail_verification),
+        ) as mock_improve,
+    ):
+        candidate = generate_candidate(
+            task_id=0,
+            candidate_index=0,
+            problem_statement="Solve x.",
+            config=config,
+            call_logger=call_logger,
+        )
+
+    assert mock_improve.call_count == 3
+    assert candidate.solution_text == "Still wrong."
+    assert candidate.verification.is_pass is False
+
+
+def test_run_match_multiple_si_rounds_stops_on_pass() -> None:
+    """run_match with si_rounds=2 must stop after the first passing SI round."""
+    config = _make_config_with_si_rounds(si_rounds=2)
+
+    fail_verification = _make_verification(is_pass=False)
+    pass_verification = _make_verification(is_pass=True)
+
+    fake_merger_result = MagicMock()
+    fake_merger_result.text = "Merged solution."
+    fake_merger_result.completion = None
+    fake_merger_result.call_id = 9
+
+    fake_improved = MagicMock()
+    fake_improved.text = "Improved merged."
+    fake_improved.completion = None
+    fake_improved.call_id = 13
+
+    cand_a = Candidate(index=0, solution_text="A", completion=None, verification=fail_verification)
+    cand_b = Candidate(index=1, solution_text="B", completion=None, verification=fail_verification)
+    call_logger = MagicMock()
+
+    with (
+        patch(
+            "open_deep_think.scripts.tournament_merge_improve.call_model",
+            return_value=fake_merger_result,
+        ),
+        patch(
+            "open_deep_think.scripts.tournament_merge_improve.run_verification",
+            return_value=fail_verification,
+        ),
+        patch(
+            "open_deep_think.scripts.tournament_merge_improve.run_self_improvement",
+            return_value=(fake_improved, pass_verification),
+        ) as mock_improve,
+    ):
+        result = run_match(
+            task_id=0,
+            round_index=0,
+            match_index=0,
+            candidate_a=cand_a,
+            candidate_b=cand_b,
+            problem_statement="Solve x.",
+            config=config,
+            call_logger=call_logger,
+        )
+
+    # First SI round passes → second round is skipped.
+    mock_improve.assert_called_once()
+    assert result.solution_text == "Improved merged."
+    assert result.verification.is_pass is True
+
+
+def test_run_match_exhausts_all_si_rounds_when_always_failing() -> None:
+    """run_match with si_rounds=3 must run all 3 rounds when verification never passes."""
+    config = _make_config_with_si_rounds(si_rounds=3)
+
+    fail_verification = _make_verification(is_pass=False)
+
+    fake_merger_result = MagicMock()
+    fake_merger_result.text = "Merged solution."
+    fake_merger_result.completion = None
+    fake_merger_result.call_id = 9
+
+    fake_improved = MagicMock()
+    fake_improved.text = "Still broken."
+    fake_improved.completion = None
+    fake_improved.call_id = 20
+
+    cand_a = Candidate(index=0, solution_text="A", completion=None, verification=fail_verification)
+    cand_b = Candidate(index=1, solution_text="B", completion=None, verification=fail_verification)
+    call_logger = MagicMock()
+
+    with (
+        patch(
+            "open_deep_think.scripts.tournament_merge_improve.call_model",
+            return_value=fake_merger_result,
+        ),
+        patch(
+            "open_deep_think.scripts.tournament_merge_improve.run_verification",
+            return_value=fail_verification,
+        ),
+        patch(
+            "open_deep_think.scripts.tournament_merge_improve.run_self_improvement",
+            return_value=(fake_improved, fail_verification),
+        ) as mock_improve,
+    ):
+        result = run_match(
+            task_id=0,
+            round_index=0,
+            match_index=0,
+            candidate_a=cand_a,
+            candidate_b=cand_b,
+            problem_statement="Solve x.",
+            config=config,
+            call_logger=call_logger,
+        )
+
+    assert mock_improve.call_count == 3
+    assert result.solution_text == "Still broken."
+    assert result.verification.is_pass is False
