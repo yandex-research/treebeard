@@ -463,3 +463,88 @@ def build_tournament_merge_prompt(
         solution_2=solution_2,
         verification_2=verification_2,
     )
+
+
+###### Tournament-merge (solutions only) prompts #######
+
+
+TOURNAMENT_MERGE_SOLUTIONS_ONLY_SYSTEM_PROMPT = """
+You are an expert mathematician tasked with synthesising two candidate solutions to a hard mathematical problem into a single, improved solution.
+
+You will be given:
+- The original problem statement.
+- Two candidate solutions (Solution 1 and Solution 2).
+
+### Your Goal ###
+
+Produce **one** merged solution that is strictly better than either input.  Use the following strategy:
+
+1. **Analyse each solution.** Read both solutions carefully to understand which parts are correct, which contain errors, and which have gaps in justification.
+2. **Combine the best parts.** Take the correct, well-justified steps from each solution.  If both solutions handle a sub-problem correctly, prefer the clearer or more rigorous version.
+3. **Repair identified issues.** Where you identify a Critical Error or Justification Gap, do not copy that flawed reasoning.  Instead, either use the other solution's correct argument for that step, or construct a new, rigorous argument from scratch.
+4. **Maintain full rigour.** Every step in the merged solution must be logically sound and clearly explained.  Do not introduce new gaps or errors.
+
+### Output Format ###
+
+Your merged solution MUST follow the same structure as the input solutions:
+
+**1. Summary**
+- **Verdict:** State whether the merged solution is complete or partial.
+- **Method Sketch:** High-level outline of the argument, including key lemmas and their precise statements.
+
+**2. Detailed Solution**
+Full, step-by-step proof.  Each step must be logically justified.  Do not include internal commentary, alternative approaches, or failed attempts.
+
+### Self-Correction Instruction ###
+
+Before finalising your output, review the merged solution to ensure it is clean, rigorous, and free of errors.
+"""
+
+TOURNAMENT_MERGE_SOLUTIONS_ONLY_PROMPT_TEMPLATE = """
+======================================================================
+### Problem ###
+
+{problem}
+
+======================================================================
+### Solution 1 ###
+
+{solution_1}
+
+======================================================================
+### Solution 2 ###
+
+{solution_2}
+
+======================================================================
+
+Based on the problem and both solutions, produce a single merged solution that combines the best parts of each and repairs any identified errors or gaps.
+Your merged solution must follow the output format specified in the system prompt.
+"""
+
+
+def build_tournament_merge_solutions_only_prompt(
+    problem: str,
+    solution_1: str,
+    solution_2: str,
+) -> str:
+    """Build a solutions-only merge prompt for a tournament match.
+
+    Unlike :func:`build_tournament_merge_prompt`, this variant does **not**
+    include verification reports.  The merger model is expected to analyse the
+    two solutions on its own and synthesise a single improved solution.
+
+    Args:
+        problem: The original problem statement.
+        solution_1: Full text of the first candidate solution.
+        solution_2: Full text of the second candidate solution.
+
+    Returns:
+        Rendered prompt string for the merger model.
+
+    """
+    return TOURNAMENT_MERGE_SOLUTIONS_ONLY_PROMPT_TEMPLATE.format(
+        problem=problem,
+        solution_1=solution_1,
+        solution_2=solution_2,
+    )

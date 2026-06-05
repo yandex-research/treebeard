@@ -46,8 +46,8 @@ from open_deep_think.imo_answer_bench.templates import (
     IMO25_STEP1_SYSTEM_PROMPT,
     IMO25_VERIFICATION_REMINDER,
     IMO25_VERIFICATION_SYSTEM_PROMPT,
-    TOURNAMENT_MERGE_SYSTEM_PROMPT,
-    build_tournament_merge_prompt,
+    TOURNAMENT_MERGE_SOLUTIONS_ONLY_SYSTEM_PROMPT,
+    build_tournament_merge_solutions_only_prompt,
 )
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -518,10 +518,11 @@ def run_match(  # noqa: PLR0913
 ) -> Candidate:
     """Run a single tournament-merge-improve match between two candidates.
 
-    The merger model synthesises a new solution from both candidates and their
-    verification reports.  The merged solution is then verified; if verification
-    fails the solution is self-improved and re-verified before being returned.
-    If the first verification already passes, self-improvement is skipped.
+    The merger model synthesises a new solution from both candidates' solution
+    texts (without verification reports).  The merged solution is then verified;
+    if verification fails the solution is self-improved and re-verified before
+    being returned.  If the first verification already passes, self-improvement
+    is skipped.
 
     Args:
         task_id: Identifier of the current task (for logging).
@@ -546,15 +547,13 @@ def run_match(  # noqa: PLR0913
         candidate_a.index,
         candidate_b.index,
     )
-    merge_prompt = build_tournament_merge_prompt(
+    merge_prompt = build_tournament_merge_solutions_only_prompt(
         problem=problem_statement,
         solution_1=candidate_a.solution_text,
-        verification_1=candidate_a.verification.verifier_output,
         solution_2=candidate_b.solution_text,
-        verification_2=candidate_b.verification.verifier_output,
     )
     merger_messages = [
-        {"role": "system", "content": TOURNAMENT_MERGE_SYSTEM_PROMPT},
+        {"role": "system", "content": TOURNAMENT_MERGE_SOLUTIONS_ONLY_SYSTEM_PROMPT},
         {"role": "user", "content": merge_prompt},
     ]
     merger_result = call_model(

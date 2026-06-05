@@ -12,8 +12,8 @@ if TYPE_CHECKING:
 import pytest
 
 from open_deep_think.imo_answer_bench.templates import (
-    TOURNAMENT_MERGE_SYSTEM_PROMPT,
-    build_tournament_merge_prompt,
+    TOURNAMENT_MERGE_SOLUTIONS_ONLY_SYSTEM_PROMPT,
+    build_tournament_merge_solutions_only_prompt,
 )
 from open_deep_think.scripts.tournament_merge_improve import (
     Candidate,
@@ -132,61 +132,53 @@ def test_build_verification_prompt_missing_marker_uses_empty_solution() -> None:
     assert "Find x." in prompt
 
 
-# ── build_tournament_merge_prompt ─────────────────────────────────────────────
+# ── build_tournament_merge_solutions_only_prompt ──────────────────────────────
 
 
-def test_build_tournament_merge_prompt_contains_all_sections() -> None:
-    prompt = build_tournament_merge_prompt(
+def test_build_tournament_merge_solutions_only_prompt_contains_all_sections() -> None:
+    """The solutions-only merge prompt must include problem and both solutions."""
+    prompt = build_tournament_merge_solutions_only_prompt(
         problem="Prove that 1+1=2.",
         solution_1="Solution A text.",
-        verification_1="Verification A text.",
         solution_2="Solution B text.",
-        verification_2="Verification B text.",
     )
     assert "Prove that 1+1=2." in prompt
     assert "Solution A text." in prompt
-    assert "Verification A text." in prompt
     assert "Solution B text." in prompt
-    assert "Verification B text." in prompt
 
 
-def test_build_tournament_merge_prompt_labels_solutions() -> None:
-    """The prompt must clearly label Solution 1 and Solution 2."""
-    prompt = build_tournament_merge_prompt(
+def test_build_tournament_merge_solutions_only_prompt_labels_solutions() -> None:
+    """The solutions-only merge prompt must clearly label Solution 1 and Solution 2."""
+    prompt = build_tournament_merge_solutions_only_prompt(
         problem="P",
         solution_1="S1",
-        verification_1="V1",
         solution_2="S2",
-        verification_2="V2",
     )
     assert "Solution 1" in prompt
     assert "Solution 2" in prompt
 
 
-def test_build_tournament_merge_prompt_labels_verification_reports() -> None:
-    """The prompt must clearly label both verification reports."""
-    prompt = build_tournament_merge_prompt(
+def test_build_tournament_merge_solutions_only_prompt_excludes_verification() -> None:
+    """The solutions-only merge prompt must NOT contain verification report sections."""
+    prompt = build_tournament_merge_solutions_only_prompt(
         problem="P",
         solution_1="S1",
-        verification_1="V1",
         solution_2="S2",
-        verification_2="V2",
     )
-    assert "Verification Report for Solution 1" in prompt
-    assert "Verification Report for Solution 2" in prompt
+    assert "Verification Report" not in prompt
 
 
-# ── TOURNAMENT_MERGE_SYSTEM_PROMPT ────────────────────────────────────────────
+# ── TOURNAMENT_MERGE_SOLUTIONS_ONLY_SYSTEM_PROMPT ─────────────────────────────
 
 
-def test_tournament_merge_system_prompt_is_non_empty_string() -> None:
-    assert isinstance(TOURNAMENT_MERGE_SYSTEM_PROMPT, str)
-    assert len(TOURNAMENT_MERGE_SYSTEM_PROMPT) > 0
+def test_tournament_merge_solutions_only_system_prompt_is_non_empty_string() -> None:
+    assert isinstance(TOURNAMENT_MERGE_SOLUTIONS_ONLY_SYSTEM_PROMPT, str)
+    assert len(TOURNAMENT_MERGE_SOLUTIONS_ONLY_SYSTEM_PROMPT) > 0
 
 
-def test_tournament_merge_system_prompt_mentions_merge_goal() -> None:
+def test_tournament_merge_solutions_only_system_prompt_mentions_merge_goal() -> None:
     """The system prompt should instruct the model to synthesise / merge solutions."""
-    lower = TOURNAMENT_MERGE_SYSTEM_PROMPT.lower()
+    lower = TOURNAMENT_MERGE_SOLUTIONS_ONLY_SYSTEM_PROMPT.lower()
     assert "merge" in lower or "synthesis" in lower or "combin" in lower
 
 
