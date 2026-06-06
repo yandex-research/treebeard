@@ -371,21 +371,10 @@ def build_tournament_comparison_prompt(
 
 
 TOURNAMENT_MERGE_SYSTEM_PROMPT = """
-You are an expert mathematician tasked with synthesising two candidate solutions to a hard mathematical problem into a single, improved solution.
-
-You will be given:
-- The original problem statement.
-- Two candidate solutions (Solution 1 and Solution 2).
-- A verification report for each solution, produced by an independent expert grader.
-
-### Your Goal ###
-
-Produce **one** merged solution that is strictly better than either input.  Use the following strategy:
-
-1. **Diagnose each solution.** Read the verification reports carefully to understand which parts of each solution are correct, which contain Critical Errors, and which have Justification Gaps.
-2. **Combine the best parts.** Take the correct, well-justified steps from each solution.  If both solutions handle a sub-problem correctly, prefer the clearer or more rigorous version.
-3. **Repair identified issues.** Where a verification report flags a Critical Error or Justification Gap, do not copy that flawed reasoning.  Instead, either use the other solution's correct argument for that step, or construct a new, rigorous argument from scratch.
-4. **Maintain full rigour.** Every step in the merged solution must be logically sound and clearly explained.  Do not introduce new gaps or errors.
+You are given a math problem and several candidate solutions. Some candidates may be incorrect or contain errors.
+Aggregate the useful ideas and produce a single, high-quality solution. 
+Reason carefully; if candidates disagree, choose the correct path. 
+If all are incorrect, then attempt a different strategy.
 
 ### Output Format ###
 
@@ -431,7 +420,7 @@ TOURNAMENT_MERGE_PROMPT_TEMPLATE = """
 
 ======================================================================
 
-Based on the problem, both solutions, and their verification reports, produce a single merged solution that combines the best parts of each and repairs any identified errors or gaps.
+Based on the problem, both solutions, and their verification reports, aggregate the useful ideas and produce a single, high-quality solution.
 Your merged solution must follow the output format specified in the system prompt.
 """
 
