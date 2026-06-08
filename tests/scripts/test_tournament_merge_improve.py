@@ -17,10 +17,13 @@ from open_deep_think.imo_answer_bench.templates import (
 )
 from open_deep_think.scripts.tournament_merge_improve import (
     Candidate,
+    TaskCallLogger,
     TournamentMergeImproveConfig,
     VerificationResult,
+    _finish_reason,
     build_solver_messages,
     build_verification_prompt,
+    call_model,
     extract_section,
     generate_candidate,
     is_power_of_two,
@@ -110,26 +113,32 @@ def test_build_solver_messages_with_extra_prompts() -> None:
 def test_build_verification_prompt_includes_problem() -> None:
     prompt = build_verification_prompt(
         problem_statement="Find all integers n.",
-        solution_text="Summary\nDetailed Solution\nHence n=0.",
+        solution_text="Method Sketch\nOverview\nDetailed Solution\nHence n=0.",
     )
     assert "Find all integers n." in prompt
 
 
-def test_build_verification_prompt_includes_detailed_solution_body() -> None:
+def test_build_verification_prompt_passes_full_solution_text() -> None:
+    """The verifier prompt must contain the entire solver response, not just the Detailed Solution."""
+    full_text = "Method Sketch\nOverview of proof\nDetailed Solution\nHence n=0."
     prompt = build_verification_prompt(
         problem_statement="Find all integers n.",
-        solution_text="Summary\nDetailed Solution\nHence n=0.",
+        solution_text=full_text,
     )
+    # Both the Method Sketch and the Detailed Solution body must appear.
+    assert "Method Sketch" in prompt
+    assert "Overview of proof" in prompt
     assert "Hence n=0." in prompt
 
 
-def test_build_verification_prompt_missing_marker_uses_empty_solution() -> None:
+def test_build_verification_prompt_works_without_detailed_solution_marker() -> None:
+    """When the model omits the marker, the full text is still passed through."""
     prompt = build_verification_prompt(
         problem_statement="Find x.",
-        solution_text="No marker here.",
+        solution_text="Just a plain solution without markers.",
     )
-    # Problem still present; solution body is empty but prompt is still built.
     assert "Find x." in prompt
+    assert "Just a plain solution without markers." in prompt
 
 
 # ── build_tournament_merge_prompt ─────────────────────────────────────────────
@@ -546,6 +555,124 @@ def test_write_config_if_shard_zero_raises_on_config_mismatch(tmp_path: Path) ->
     (tmp_path / "config.json").write_text(json.dumps(old_config), encoding="utf-8")
     with pytest.raises(ValueError, match="Config mismatch"):
         write_config_if_shard_zero(tmp_path, new_config, shard_index=0)
+
+
+# ── _finish_reason ────────────────────────────────────────────────────────────
+
+
+def test_finish_reason_returns_none_for_none_completion() -> None:
+    assert _finish_reason(None) is None
+
+
+def test_finish_reason_returns_none_for_empty_choices() -> None:
+    completion = MagicMock()
+    completion.choices = []
+    assert _finish_reason(completion) is None
+
+
+def test_finish_reason_returns_stop() -> None:
+    choice = MagicMock()
+    choice.finish_reason = "stop"
+    completion = MagicMock()
+    completion.choices = [choice]
+    assert _finish_reason(completion) == "stop"
+
+
+def test_finish_reason_returns_length() -> None:
+    choice = MagicMock()
+    choice.finish_reason = "length"
+    completion = MagicMock()
+    completion.choices = [choice]
+    assert _finish_reason(completion) == "length"
+
+
+# ── call_model retry on finish_reason='length' ───────────────────────────────
+
+
+def _make_completion(*, finish_reason: str, content: str) -> MagicMock:
+    """Build a minimal ChatCompletion-like mock with JSON-serializable model_dump."""
+    message = MagicMock()
+    message.content = content
+    choice = MagicMock()
+    choice.finish_reason = finish_reason
+    choice.message = message
+    completion = MagicMock()
+    completion.choices = [choice]
+    completion.model_dump.return_value = {
+        "choices": [{"finish_reason": finish_reason, "message": {"content": content}}],
+    }
+    return completion
+
+
+def test_call_model_retries_once_on_length(tmp_path: Path) -> None:
+    """call_model must retry exactly once when finish_reason is 'length'."""
+    first = _make_completion(finish_reason="length", content="truncated")
+    second = _make_completion(finish_reason="stop", content="complete")
+    log_path = tmp_path / "log.jsonl"
+    logger = TaskCallLogger(task_id=0, task_log_path=log_path)
+
+    with patch("open_deep_think.scripts.tournament_merge_improve.chat_api_call", side_effect=[first, second]) as mock:
+        result = call_model(
+            model="m",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=100,
+            temperature=None,
+            top_p=None,
+            phase="test",
+            candidate_index=0,
+            round_index=None,
+            call_logger=logger,
+        )
+
+    assert mock.call_count == 2
+    assert result.text == "complete"
+
+
+def test_call_model_no_retry_on_stop(tmp_path: Path) -> None:
+    """call_model must NOT retry when finish_reason is 'stop'."""
+    comp = _make_completion(finish_reason="stop", content="done")
+    log_path = tmp_path / "log.jsonl"
+    logger = TaskCallLogger(task_id=0, task_log_path=log_path)
+
+    with patch("open_deep_think.scripts.tournament_merge_improve.chat_api_call", return_value=comp) as mock:
+        result = call_model(
+            model="m",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=100,
+            temperature=None,
+            top_p=None,
+            phase="test",
+            candidate_index=0,
+            round_index=None,
+            call_logger=logger,
+        )
+
+    assert mock.call_count == 1
+    assert result.text == "done"
+
+
+def test_call_model_accepts_double_length(tmp_path: Path) -> None:
+    """If both attempts return finish_reason='length', the result is accepted."""
+    first = _make_completion(finish_reason="length", content="trunc1")
+    second = _make_completion(finish_reason="length", content="trunc2")
+    log_path = tmp_path / "log.jsonl"
+    logger = TaskCallLogger(task_id=0, task_log_path=log_path)
+
+    with patch("open_deep_think.scripts.tournament_merge_improve.chat_api_call", side_effect=[first, second]) as mock:
+        result = call_model(
+            model="m",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=100,
+            temperature=None,
+            top_p=None,
+            phase="test",
+            candidate_index=0,
+            round_index=None,
+            call_logger=logger,
+        )
+
+    assert mock.call_count == 2
+    assert result.text == "trunc2"
 
 
 # ── Multi-round self-improvement tests ────────────────────────────────────────

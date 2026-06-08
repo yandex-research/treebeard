@@ -231,8 +231,12 @@ def build_solver_messages(problem_statement: str, other_prompts: tuple[str, ...]
 
 
 def build_verification_prompt(problem_statement: str, solution_text: str) -> str:
-    """Build the verifier user prompt exactly as in the official pipeline."""
-    detailed_solution = extract_section(solution_text, marker="Detailed Solution", after=True)
+    """Build the verifier user prompt.
+
+    Passes the full solver response (Method Sketch + Detailed Solution) to the
+    verifier so that the verifier can evaluate both the outline and the proof,
+    even when the model omits the ``Detailed Solution`` marker.
+    """
     return f"""
 ======================================================================
 ### Problem ###
@@ -242,10 +246,17 @@ def build_verification_prompt(problem_statement: str, solution_text: str) -> str
 ======================================================================
 ### Solution ###
 
-{detailed_solution}
+{solution_text}
 
 {IMO25_VERIFICATION_REMINDER}
 """
+
+
+def _finish_reason(completion: ChatCompletion | None) -> str | None:
+    """Extract the finish reason from the first choice, or None."""
+    if completion is None or not completion.choices:
+        return None
+    return completion.choices[0].finish_reason
 
 
 def call_model(  # noqa: PLR0913
@@ -260,7 +271,12 @@ def call_model(  # noqa: PLR0913
     round_index: int | None,
     call_logger: TaskCallLogger,
 ) -> CallResult:
-    """Call a chat model and persist the full request/response to JSONL logs."""
+    """Call a chat model and persist the full request/response to JSONL logs.
+
+    If the first attempt finishes with ``finish_reason == "length"`` (output
+    truncated), a single retry is performed.  If the retry also truncates the
+    result is accepted as-is.
+    """
     completion: ChatCompletion | None = None
     response_text = ""
     try:
@@ -281,6 +297,39 @@ def call_model(  # noqa: PLR0913
             completion=completion,
             response_text=response_text,
         )
+
+        # Retry once if output was truncated due to max_tokens.
+        if _finish_reason(completion) == "length":
+            LOGGER.warning(
+                "Phase %s (candidate=%s, round=%s): finish_reason='length' — retrying once",
+                phase,
+                candidate_index,
+                round_index,
+            )
+            completion = chat_api_call(
+                model=model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+            )
+            response_text = completion_text(completion)
+            call_id = call_logger.record(
+                phase=f"{phase}_length_retry",
+                candidate_index=candidate_index,
+                round_index=round_index,
+                model=model,
+                messages=messages,
+                completion=completion,
+                response_text=response_text,
+            )
+            if _finish_reason(completion) == "length":
+                LOGGER.warning(
+                    "Phase %s (candidate=%s, round=%s): finish_reason='length' persists after retry — accepting as-is",
+                    phase,
+                    candidate_index,
+                    round_index,
+                )
     except Exception as error:
         call_id = call_logger.record(
             phase=phase,
@@ -351,7 +400,7 @@ def run_verification(  # noqa: PLR0913
     )
 
     passed = is_yes_response(classifier_result.text)
-    bug_report = "" if passed else extract_section(verifier_result.text, marker="Detailed Verification", after=False)
+    bug_report = "" if passed else verifier_result.text
     LOGGER.info(
         "Task %s candidate %s verification=%s",
         task_id,

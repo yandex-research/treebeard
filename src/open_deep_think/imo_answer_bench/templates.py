@@ -182,19 +182,15 @@ IMO25_STEP1_SYSTEM_PROMPT = """
 
 ### Output Format ###
 
-Your response MUST be structured into the following sections, in this exact order.
+Your response MUST be structured into the following two sections, in this exact order. Do NOT add any other sections or wrappers around them.
 
-**1. Summary**
+**1. Method Sketch**
 
-Provide a concise overview of your findings. This section must contain two parts:
-
-*   **a. Verdict:** State clearly whether you have found a complete solution or a partial solution.
-    *   **For a complete solution:** State the final answer, e.g., "I have successfully solved the problem. The final answer is..."
-    *   **For a partial solution:** State the main rigorous conclusion(s) you were able to prove, e.g., "I have not found a complete solution, but I have rigorously proven that..."
-*   **b. Method Sketch:** Present a high-level, conceptual outline of your solution. This sketch should allow an expert to understand the logical flow of your argument without reading the full detail. It should include:
-    *   A narrative of your overall strategy.
-    *   The full and precise mathematical statements of any key lemmas or major intermediate results.
-    *   If applicable, describe any key constructions or case splits that form the backbone of your argument.
+Present a high-level, conceptual outline of your solution. This sketch should allow an expert to understand the logical flow of your argument without reading the full detail. It must include:
+*   Whether you have found a complete solution or a partial solution, and the final answer if complete.
+*   A narrative of your overall strategy.
+*   The full and precise mathematical statements of any key lemmas or major intermediate results.
+*   If applicable, describe any key constructions or case splits that form the backbone of your argument.
 
 **2. Detailed Solution**
 
@@ -389,11 +385,10 @@ Produce **one** merged solution that is strictly better than either input.  Use 
 
 ### Output Format ###
 
-Your merged solution MUST follow the same structure as the input solutions:
+Your merged solution MUST be structured into the following two sections, in this exact order. Do NOT add any other sections or wrappers around them.
 
-**1. Summary**
-- **Verdict:** State whether the merged solution is complete or partial.
-- **Method Sketch:** High-level outline of the argument, including key lemmas and their precise statements.
+**1. Method Sketch**
+High-level outline of the argument, including whether the merged solution is complete or partial, and key lemmas with their precise statements.
 
 **2. Detailed Solution**
 Full, step-by-step proof.  Each step must be logically justified.  Do not include internal commentary, alternative approaches, or failed attempts.
