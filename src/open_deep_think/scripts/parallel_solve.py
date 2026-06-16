@@ -107,6 +107,7 @@ def build_child_command(args: argparse.Namespace, slot: TaskSlot, base_run_name:
         "simple_tournament": "open_deep_think.scripts.simple_tournament",
         "tournament_merge": "open_deep_think.scripts.tournament_merge",
         "tournament_merge_improve": "open_deep_think.scripts.tournament_merge_improve",
+        "tournament_improve": "open_deep_think.scripts.tournament_improve",
         "baseline": "open_deep_think.scripts.baseline_solve",
     }
     module_name = module_map[args.script]
@@ -138,10 +139,12 @@ def build_child_command(args: argparse.Namespace, slot: TaskSlot, base_run_name:
         add_optional_arg(command, "--max_consecutive_failures", args.max_consecutive_failures)
         for other_prompt in args.other_prompt:
             command.extend(["--other_prompt", other_prompt])
-    elif args.script == "simple_tournament":
+    elif args.script in {"simple_tournament", "tournament_improve"}:
         _append_common_tournament_args(command, args)
         add_optional_arg(command, "--judge_model", args.judge_model)
         add_optional_arg(command, "--judge_max_tokens", args.judge_max_tokens)
+        if args.script == "tournament_improve":
+            add_optional_arg(command, "--si_rounds", args.si_rounds)
     elif args.script in {"tournament_merge", "tournament_merge_improve"}:
         _append_common_tournament_args(command, args)
         add_optional_arg(command, "--merger_model", args.merger_model)
@@ -260,7 +263,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output_path", type=str, required=True, help="Base output directory for child runs")
     parser.add_argument(
         "--script",
-        choices=["baseline", "imo25", "simple_tournament", "tournament_merge", "tournament_merge_improve"],
+        choices=[
+            "baseline",
+            "imo25",
+            "simple_tournament",
+            "tournament_merge",
+            "tournament_merge_improve",
+            "tournament_improve",
+        ],
         default="baseline",
         help="Child script to run in parallel",
     )
@@ -318,8 +328,10 @@ def parse_args() -> argparse.Namespace:
     # Forwarded tournament_merge arguments.
     parser.add_argument("--merger_model", type=str, help="Forwarded as --merger_model for tournament_merge")
     parser.add_argument("--merger_max_tokens", type=int, help="Forwarded as --merger_max_tokens for tournament_merge")
-    # Forwarded tournament_merge_improve arguments.
-    parser.add_argument("--si_rounds", type=int, help="Forwarded as --si_rounds for tournament_merge_improve")
+    # Forwarded tournament_merge_improve / tournament_improve arguments.
+    parser.add_argument(
+        "--si_rounds", type=int, help="Forwarded as --si_rounds for tournament_merge_improve / tournament_improve"
+    )
     # Forwarded baseline arguments.
     parser.add_argument("--baseline_max_tokens", type=int, help="Forwarded as --max_tokens for baseline_solve")
     return parser.parse_args()
