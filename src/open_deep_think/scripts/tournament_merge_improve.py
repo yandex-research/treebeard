@@ -1,24 +1,24 @@
 """Tournament-merge-improve solution pipeline on IMO AnswerBench.
 
-This script extends the tournament-merge pipeline by adding a self-improvement
+This script extends the tournament-merge pipeline by adding a correction
 phase after every verification step.  After each solution is generated or merged
-and verified, the solver is asked to self-improve the solution (using the
-IMO25 self-improvement prompt), and the improved solution is then re-verified
-before advancing to the next stage.
+and verified, the solver receives the verification bug report (via
+``IMO25_CORRECTION_PROMPT``) and is asked to fix the identified issues.  The
+corrected solution is then re-verified before advancing to the next stage.
 
-The number of self-improvement rounds is configurable via ``--si_rounds``
-(default 1).  Each round runs: verify → (if failed) self-improve → re-verify.
-If verification passes at any point, remaining rounds are skipped.
+The number of correction rounds is configurable via ``--si_rounds``
+(default 1).  Each round runs: verify → (if failed) correct with bug report →
+re-verify.  If verification passes at any point, remaining rounds are skipped.
 
 Pipeline overview:
 1. Generate N independent solutions (same first-iteration prompt as IMO25).
-2. For each candidate: verify → [up to si_rounds of: self-improve → verify].
+2. For each candidate: verify → [up to si_rounds of: correct → verify].
 3. Run ceil(log2(N)) tournament rounds:
    - Split the current pool into consecutive pairs.
    - For each pair, call the merger model to produce a combined solution.
-   - Verify the merged solution → [up to si_rounds of: self-improve → verify].
-   - The improved merged candidate advances to the next round.
-4. The last remaining (merged + improved) solution is the final answer.
+   - Verify the merged solution → [up to si_rounds of: correct → verify].
+   - The corrected merged candidate advances to the next round.
+4. The last remaining (merged + corrected) solution is the final answer.
 
 Outputs are saved per task with files compatible with `scripts/evaluate.py`:
 - `Task_{id}_solution.txt`
@@ -46,7 +46,7 @@ from open_deep_think.api import chat_api_call
 from open_deep_think.imo_answer_bench.extract import extract_solution
 from open_deep_think.imo_answer_bench.templates import (
     IMO25_BINARY_CORRECTNESS_PROMPT,
-    IMO25_SELF_IMPROVEMENT_PROMPT,
+    IMO25_CORRECTION_PROMPT,
     IMO25_STEP1_SYSTEM_PROMPT,
     IMO25_VERIFICATION_REMINDER,
     IMO25_VERIFICATION_SYSTEM_PROMPT,
@@ -374,20 +374,23 @@ def run_self_improvement(  # noqa: PLR0913
     candidate_index: int,
     problem_statement: str,
     solution_text: str,
+    bug_report: str,
     config: TournamentMergeImproveConfig,
     call_logger: TaskCallLogger,
     round_index: int | None = None,
 ) -> tuple[CallResult, VerificationResult]:
-    """Run a self-improvement pass followed by re-verification.
+    """Run a correction pass guided by a bug report, followed by re-verification.
 
-    The solver is asked to improve the given solution using the IMO25
-    self-improvement prompt.  The improved solution is then verified.
+    The solver receives the verification bug report via
+    ``IMO25_CORRECTION_PROMPT`` and is asked to fix the identified issues.
+    The corrected solution is then verified.
 
     Args:
         task_id: Identifier of the current task (for logging).
         candidate_index: Index of the candidate being improved (for logging).
         problem_statement: The original problem statement.
         solution_text: The current solution text to improve upon.
+        bug_report: Verification bug report describing the issues found.
         config: Pipeline configuration.
         call_logger: Logger for LLM calls.
         round_index: Optional tournament round index (for logging).
@@ -397,14 +400,15 @@ def run_self_improvement(  # noqa: PLR0913
 
     """
     solver_base_messages = build_solver_messages(problem_statement, config.other_prompts)
-    LOGGER.info("Task %s candidate %s self-improving", task_id, candidate_index)
+    correction_prompt = f"{IMO25_CORRECTION_PROMPT}\n\n{bug_report}"
+    LOGGER.info("Task %s candidate %s self-improving with bug report", task_id, candidate_index)
     improved_result = call_model(
         model=config.solver_model,
         messages=[
             {"role": "system", "content": IMO25_STEP1_SYSTEM_PROMPT},
             *solver_base_messages,
             {"role": "assistant", "content": solution_text},
-            {"role": "user", "content": IMO25_SELF_IMPROVEMENT_PROMPT},
+            {"role": "user", "content": correction_prompt},
         ],
         max_tokens=config.solver_max_tokens,
         temperature=config.temperature,
@@ -505,6 +509,7 @@ def generate_candidate(
             candidate_index=candidate_index,
             problem_statement=problem_statement,
             solution_text=current_text,
+            bug_report=verification.bug_report,
             config=config,
             call_logger=call_logger,
             round_index=None,
@@ -632,6 +637,7 @@ def run_match(  # noqa: PLR0913
             candidate_index=merged_index,
             problem_statement=problem_statement,
             solution_text=current_text,
+            bug_report=verification.bug_report,
             config=config,
             call_logger=call_logger,
             round_index=round_index,

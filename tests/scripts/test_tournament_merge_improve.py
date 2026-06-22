@@ -274,7 +274,7 @@ def _make_verification(*, is_pass: bool) -> VerificationResult:
 
 
 def test_run_self_improvement_calls_solver_and_verifier() -> None:
-    """run_self_improvement must call the solver (self-improve) then run_verification."""
+    """run_self_improvement must call the solver (correction) then run_verification."""
     config = _make_config()
 
     fake_call_result = MagicMock()
@@ -300,6 +300,7 @@ def test_run_self_improvement_calls_solver_and_verifier() -> None:
             candidate_index=0,
             problem_statement="Solve x.",
             solution_text="Initial solution.",
+            bug_report="Step 3 has a sign error.",
             config=config,
             call_logger=call_logger,
             round_index=None,
@@ -309,6 +310,50 @@ def test_run_self_improvement_calls_solver_and_verifier() -> None:
     mock_verify.assert_called_once()
     assert improved.text == "Improved solution text."
     assert verification.is_pass is True
+
+
+def test_run_self_improvement_includes_bug_report_in_correction_prompt() -> None:
+    """run_self_improvement must include the bug report in the correction prompt sent to the solver."""
+    from open_deep_think.imo_answer_bench.templates import IMO25_CORRECTION_PROMPT
+
+    config = _make_config()
+    bug_report = "Critical Error: Step 3 divides by zero."
+
+    fake_call_result = MagicMock()
+    fake_call_result.text = "Corrected solution."
+    fake_call_result.completion = None
+    fake_call_result.call_id = 42
+
+    fake_verification = _make_verification(is_pass=True)
+    call_logger = MagicMock()
+
+    with (
+        patch(
+            "open_deep_think.scripts.tournament_merge_improve.call_model",
+            return_value=fake_call_result,
+        ) as mock_call,
+        patch(
+            "open_deep_think.scripts.tournament_merge_improve.run_verification",
+            return_value=fake_verification,
+        ),
+    ):
+        run_self_improvement(
+            task_id=0,
+            candidate_index=0,
+            problem_statement="Solve x.",
+            solution_text="Initial solution.",
+            bug_report=bug_report,
+            config=config,
+            call_logger=call_logger,
+            round_index=None,
+        )
+
+    # The last user message must contain the correction prompt and the bug report.
+    call_kwargs = mock_call.call_args
+    messages = call_kwargs.kwargs["messages"]
+    last_user_message = messages[-1]["content"]
+    assert IMO25_CORRECTION_PROMPT in last_user_message
+    assert bug_report in last_user_message
 
 
 def test_generate_candidate_calls_self_improvement_when_first_verify_fails() -> None:
