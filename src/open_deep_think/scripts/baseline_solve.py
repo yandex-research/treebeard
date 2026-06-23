@@ -21,12 +21,12 @@ from typing import Any
 import urllib3
 from datasets import load_dataset
 
-from open_deep_think.api import single_turn_api_call
+from open_deep_think.api import chat_api_call
 from open_deep_think.imo_answer_bench.extract import (
     extract_reasoning,
     extract_solution,
 )
-from open_deep_think.imo_answer_bench.templates import build_problem_prompt
+from open_deep_think.imo_answer_bench.templates import IMO25_STEP1_SYSTEM_PROMPT
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -108,11 +108,14 @@ def solve_problem(  # noqa: PLR0913
     logger.info("Processing Task %s...", task_id)
 
     try:
-        prompt = build_problem_prompt(problem)
+        messages = [
+            {"role": "system", "content": IMO25_STEP1_SYSTEM_PROMPT},
+            {"role": "user", "content": problem},
+        ]
 
-        completion = single_turn_api_call(
+        completion = chat_api_call(
             model=model,
-            prompt=prompt,
+            messages=messages,
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,
@@ -128,7 +131,7 @@ def solve_problem(  # noqa: PLR0913
     except Exception as e:
         logger.exception("Error processing Task %s", task_id)
         # Save error information
-        error_response = {"error": str(e), "task_id": task_id, "prompt": prompt}
+        error_response = {"error": str(e), "task_id": task_id, "problem": problem}
         save_results(output_path, task_id, "", "", error_response)
 
 
