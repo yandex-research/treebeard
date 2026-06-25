@@ -26,7 +26,6 @@ from open_deep_think.imo_answer_bench.extract import (
     extract_reasoning,
     extract_solution,
 )
-from open_deep_think.imo_answer_bench.templates import IMO25_STEP1_SYSTEM_PROMPT
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -108,9 +107,9 @@ def solve_problem(  # noqa: PLR0913
     logger.info("Processing Task %s...", task_id)
 
     try:
+        user_content = f"Generate a rigorous proof to the following question:\n\n{problem}"
         messages = [
-            {"role": "system", "content": IMO25_STEP1_SYSTEM_PROMPT},
-            {"role": "user", "content": problem},
+            {"role": "user", "content": user_content},
         ]
 
         completion = chat_api_call(
