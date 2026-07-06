@@ -51,7 +51,7 @@ def load_solutions(solutions_dir: Path) -> dict[str, str]:
     return solutions
 
 
-def evaluate_solutions(  # noqa: PLR0913
+def evaluate_solutions(
     solutions_dir: str,
     dataset_name: str,
     dataset_split: str,
@@ -91,7 +91,15 @@ def evaluate_solutions(  # noqa: PLR0913
     logger.info("Using judge model: %s", judge_model_name)
 
     # Evaluation metrics
-    results = {"total": 0, "correct": 0, "incorrect": 0, "no_boxed_answer": 0, "missing_solution": 0, "details": []}
+    results = {
+        "total": 0,
+        "correct": 0,
+        "incorrect": 0,
+        "no_boxed_answer": 0,
+        "missing_solution": 0,
+        "details": [],
+        "proof_score": 0, # only used for proof judge
+    }
 
     # Iterate over dataset problems
     logger.info("Evaluating solutions...")
@@ -139,29 +147,40 @@ def evaluate_solutions(  # noqa: PLR0913
 
         # Judge the answer using the full solution text
         results["total"] += 1
-        is_correct, judge_response = judge_answer(
+        verdict, judge_response = judge_answer(
             problem_statement, solution_text, ground_truth, judge_model_name, judge_type, guidelines, max_tokens
         )
-        result_entry["is_correct"] = is_correct
+        result_entry["verdict"] = verdict
         result_entry["judge_response"] = judge_response
 
-        if is_correct:
-            results["correct"] += 1
-            result_entry["status"] = "correct"
-        else:
-            results["incorrect"] += 1
-            result_entry["status"] = "incorrect"
+        if judge_type == JudgeType.ANSWER:
+            if verdict:
+                results["correct"] += 1
+                result_entry["status"] = "correct"
+            else:
+                results["incorrect"] += 1
+                result_entry["status"] = "incorrect"
+        elif judge_type == JudgeType.PROOF:
+            results["proof_score"] += verdict
+            result_entry["proof_score"] = verdict
 
         results["details"].append(result_entry)
 
         # Update progress bar with running accuracy
         if results["total"] > 0:
-            current_acc = results["correct"] / results["total"]
-            pbar.set_description(f"Evaluating (Acc: {current_acc:.2%}, {results['correct']}/{results['total']})")
+            if judge_type == JudgeType.ANSWER:
+                current_acc = results["correct"] / results["total"]
+                pbar.set_description(f"Evaluating (Acc: {current_acc:.2%}, {results['correct']}/{results['total']})")
+            if judge_type == JudgeType.PROOF:
+                current_acc = results["proof_score"] / (results["total"] * 7)
+                pbar.set_description(f"Evaluating (Acc: {current_acc:.2%}, {results['proof_score']}/{results['total'] * 7})")
 
     # Calculate accuracy
     if results["total"] > 0:
-        results["accuracy"] = results["correct"] / results["total"]
+        if judge_type == JudgeType.ANSWER:
+            results["accuracy"] = results["correct"] / results["total"]
+        if judge_type == JudgeType.PROOF:
+            results["accuracy"] = results["proof_score"] / (results["total"] * 7)
     else:
         results["accuracy"] = 0.0
 
@@ -191,12 +210,7 @@ def main() -> None:
         help="Judge type (answer or proof)",
     )
     parser.add_argument("--max_tokens", type=int, default=2048, help="Maximum tokens for judge responses")
-    parser.add_argument(
-        "--dataset_name",
-        type=str,
-        default="Hwilner/imo-answerbench",
-        help="Hugging Face dataset name",
-    )
+    parser.add_argument("--dataset_name", type=str, default="Hwilner/imo-answerbench", help="Hugging Face dataset name")
     parser.add_argument("--dataset_split", type=str, default="train", help="Hugging Face dataset split")
 
     args = parser.parse_args()
@@ -227,8 +241,13 @@ def main() -> None:
     logger.info("EVALUATION RESULTS")
     logger.info("=" * 80)
     logger.info("Total evaluated: %s", results["total"])
-    logger.info("Correct: %s", results["correct"])
-    logger.info("Incorrect: %s", results["incorrect"])
+    if args.judge_type == JudgeType.ANSWER:
+        logger.info("Correct: %s", results["correct"])
+        logger.info("Incorrect: %s", results["incorrect"])
+    if args.judge_type == JudgeType.PROOF:
+        logger.info("Total score: %s", results["proof_score"])
+        logger.info("Max score: %s", results["total"] * 7)
+        
     logger.info("No boxed answer: %s", results["no_boxed_answer"])
     logger.info("Missing solution: %s", results["missing_solution"])
     logger.info("Accuracy: %.2f%%", results["accuracy"] * 100)
