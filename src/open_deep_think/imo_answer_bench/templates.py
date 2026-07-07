@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import enum
 
-PROBLEM_PROMPT_PREFIX = "Please reason step by step, and put your final answer within \\boxed{}."
+PROBLEM_PROMPT_PREFIX = "Please reason step by step and provide a detailed solution for the following problem:"
 
 """Prefix instruction used when asking a model to solve a benchmark problem."""
 
@@ -207,7 +207,7 @@ Before finalizing your output, carefully review your "Method Sketch" and "Detail
 """
 
 IMO25_SELF_IMPROVEMENT_PROMPT = """
-You have an opportunity to improve your solution. Please review your solution carefully. Correct errors and fill justification gaps if any. Your second round of output should strictly follow the instructions in the system prompt.
+You have an opportunity to improve your solution. Please review your solution carefully. Correct errors and fill justification gaps if any. Your output should be a complete improved solution.
 """
 
 IMO25_CHECK_VERIFICATION_PROMPT = """
@@ -217,7 +217,7 @@ If you feel that modifications to any item or its justification is necessary. Pl
 """
 
 IMO25_CORRECTION_PROMPT = """
-Below is the bug report. If you agree with certain item in it, can you improve your solution so that it is complete and rigorous? Note that the evaluator who generates the bug report can misunderstand your solution and thus make mistakes. If you do not agree with certain item in the bug report, please add some detailed explanations to avoid such misunderstanding. Your new solution should strictly follow the instructions in the system prompt.
+Below is the bug report. If you agree with certain item in it, can you improve your solution so that it is complete and rigorous? Note that the evaluator who generates the bug report can misunderstand your solution and thus make mistakes. If you do not agree with certain item in the bug report, please add some detailed explanations to avoid such misunderstanding. Your output should be a complete improved solution.
 """
 
 IMO25_VERIFICATION_SYSTEM_PROMPT = """
