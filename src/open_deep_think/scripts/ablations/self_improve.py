@@ -364,7 +364,6 @@ def call_model(  # noqa: PLR0913
 
 def build_verification_prompt(problem_statement: str, solution_text: str) -> str:
     """Build the verifier user prompt, mirroring the official pipeline."""
-    detailed_solution = extract_section(solution_text, marker="Detailed Solution", after=True)
     return f"""
 ======================================================================
 ### Problem ###
@@ -374,7 +373,7 @@ def build_verification_prompt(problem_statement: str, solution_text: str) -> str
 ======================================================================
 ### Solution ###
 
-{detailed_solution}
+{solution_text}
 
 {IMO25_VERIFICATION_REMINDER}
 """
