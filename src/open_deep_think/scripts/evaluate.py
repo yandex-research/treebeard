@@ -247,7 +247,7 @@ def main() -> None:
     if args.judge_type == JudgeType.PROOF:
         logger.info("Total score: %s", results["proof_score"])
         logger.info("Max score: %s", results["total"] * 7)
-        
+
     logger.info("No boxed answer: %s", results["no_boxed_answer"])
     logger.info("Missing solution: %s", results["missing_solution"])
     logger.info("Accuracy: %.2f%%", results["accuracy"] * 100)

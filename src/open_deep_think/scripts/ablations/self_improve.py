@@ -19,8 +19,7 @@ Two modes (controlled by ``--use_verification``):
 
 Tasks are processed concurrently via a thread pool; candidates within a
 task are processed sequentially (rounds are inherently sequential).
-Each task writes a single JSONL file containing both LLM call records
-and per-round result summaries.
+Each task writes a single JSONL file containing LLM call records.
 
 Usage::
 
@@ -54,7 +53,6 @@ from open_deep_think.imo_answer_bench.templates import (
     IMO25_BINARY_CORRECTNESS_PROMPT,
     IMO25_CORRECTION_PROMPT,
     IMO25_SELF_IMPROVEMENT_PROMPT,
-    IMO25_STEP1_SYSTEM_PROMPT,
     IMO25_VERIFICATION_REMINDER,
     IMO25_VERIFICATION_SYSTEM_PROMPT,
     build_problem_prompt,
@@ -130,10 +128,9 @@ class RoundResult:
 
 
 class TaskCallLogger:
-    """Persist every LLM call and round result to a single per-task JSONL file.
+    """Persist every LLM call to a single per-task JSONL file.
 
-    Each record has a ``record_type`` field (``"llm_call"`` or
-    ``"round_result"``) so consumers can filter easily.
+    Each record has a ``record_type`` field set to ``"llm_call"``.
     """
 
     def __init__(self, task_id: int, log_path: Path) -> None:
@@ -179,34 +176,6 @@ class TaskCallLogger:
         }
         append_jsonl(self._log_path, payload)
         return call_id
-
-    def record_round_result(  # noqa: PLR0913
-        self,
-        *,
-        candidate_index: int,
-        round_index: int,
-        input_solution: str,
-        output_solution: str,
-        verification_report: str | None = None,
-        verification_is_pass: bool | None = None,
-        classifier_output: str | None = None,
-        improvement_call_id: int,
-    ) -> None:
-        """Append a structured round-result summary to the JSONL log."""
-        payload: dict[str, Any] = {
-            "record_type": "round_result",
-            "timestamp": utc_now_iso(),
-            "task_id": self._task_id,
-            "candidate_index": candidate_index,
-            "round_index": round_index,
-            "input_solution": input_solution,
-            "output_solution": output_solution,
-            "verification_report": verification_report,
-            "verification_is_pass": verification_is_pass,
-            "classifier_output": classifier_output,
-            "improvement_call_id": improvement_call_id,
-        }
-        append_jsonl(self._log_path, payload)
 
 
 # ---------------------------------------------------------------------------
@@ -290,32 +259,48 @@ def load_task_ids_from_file(path: str) -> list[int]:
 
 
 def load_candidates(candidates_dir: Path, task_id: int) -> list[dict[str, Any]]:
-    """Load candidate solutions for a task from the baseline candidates JSON.
+    """Load candidate solutions for a task from the baseline LLM outputs JSONL.
+
+    Reads ``Task_{task_id}_llm_outputs.jsonl`` and extracts records with
+    ``phase == "initial_solution"``, converting each into a dict with
+    ``"index"`` and ``"solution_text"`` keys expected by the rest of the
+    pipeline.
 
     Args:
-        candidates_dir: Directory containing ``Task_*_candidates.json`` files
-            produced by :mod:`generate_baseline`.
+        candidates_dir: Directory containing ``Task_*_llm_outputs.jsonl``
+            files produced by :mod:`generate_baseline`.
         task_id: Task identifier.
 
     Returns:
-        List of candidate dicts, each with ``"index"`` and ``"solution_text"``.
+        List of candidate dicts sorted by ``"index"``, each with
+        ``"index"`` and ``"solution_text"`` keys.
 
     Raises:
-        FileNotFoundError: If the candidates file does not exist.
-        ValueError: If the file has no candidates.
+        FileNotFoundError: If the LLM outputs file does not exist.
+        ValueError: If no initial_solution records are found.
 
     """
-    candidates_file = candidates_dir / f"Task_{task_id}_candidates.json"
-    if not candidates_file.exists():
-        msg = f"Candidates file not found: {candidates_file}"
+    llm_log_file = candidates_dir / f"Task_{task_id}_llm_outputs.jsonl"
+    if not llm_log_file.exists():
+        msg = f"LLM outputs file not found: {llm_log_file}"
         raise FileNotFoundError(msg)
 
-    data = json.loads(candidates_file.read_text(encoding="utf-8"))
-    candidates = data.get("candidates", [])
+    candidates: list[dict[str, Any]] = []
+    for line in llm_log_file.read_text(encoding="utf-8").strip().splitlines():
+        record = json.loads(line)
+        if record.get("phase") == "initial_solution":
+            candidates.append(
+                {
+                    "index": record["candidate_index"],
+                    "solution_text": record.get("response_text", ""),
+                }
+            )
+
     if not candidates:
-        msg = f"No candidates found in {candidates_file}"
+        msg = f"No initial_solution records found in {llm_log_file}"
         raise ValueError(msg)
 
+    candidates.sort(key=lambda c: c["index"])
     return candidates
 
 
@@ -508,14 +493,6 @@ def run_improvement_round_no_verification(  # noqa: PLR0913
 
     output_solution = result.text or current_solution
 
-    call_logger.record_round_result(
-        candidate_index=candidate_index,
-        round_index=round_index,
-        input_solution=current_solution,
-        output_solution=output_solution,
-        improvement_call_id=result.call_id,
-    )
-
     LOGGER.info(
         "Task %s candidate %s round %s self-improvement complete",
         task_id,
@@ -581,17 +558,6 @@ def run_improvement_round_with_verification(  # noqa: PLR0913
     )
 
     output_solution = result.text or current_solution
-
-    call_logger.record_round_result(
-        candidate_index=candidate_index,
-        round_index=round_index,
-        input_solution=current_solution,
-        output_solution=output_solution,
-        verification_report=verification.verifier_output,
-        verification_is_pass=verification.is_pass,
-        classifier_output=verification.classifier_output,
-        improvement_call_id=result.call_id,
-    )
 
     LOGGER.info(
         "Task %s candidate %s round %s correction complete (verification=%s)",
@@ -696,13 +662,13 @@ def process_task(
     """Process all candidates for one task sequentially.
 
     For each candidate, loads the baseline solution and runs
-    ``config.n_rounds`` of self-improvement.  All LLM calls and round
-    results are written to a single JSONL file per task.
+    ``config.n_rounds`` of self-improvement.  All LLM calls are
+    written to a single JSONL file per task.
 
     Args:
         task_id: Dataset task identifier.
         problem_statement: Raw problem text.
-        candidates_dir: Directory with baseline candidate JSONs.
+        candidates_dir: Directory with baseline LLM output JSONL logs.
         config: Pipeline configuration.
         output_dir: Directory for output files.
 
@@ -799,7 +765,7 @@ def run_tasks_concurrent(  # noqa: PLR0913
     Args:
         task_ids: Ordered list of task identifiers to process.
         problems: Problem statements corresponding to *task_ids*.
-        candidates_dir: Directory with baseline candidate JSONs.
+        candidates_dir: Directory with baseline LLM output JSONL logs.
         config: Pipeline configuration.
         output_dir: Directory for per-task output files.
         concurrency: Maximum concurrent worker threads.
@@ -854,7 +820,7 @@ def parse_args() -> argparse.Namespace:
         "--candidates_dir",
         type=str,
         required=True,
-        help="Directory with baseline candidate JSONs (from generate_baseline).",
+        help="Directory with baseline LLM output JSONL logs (from generate_baseline).",
     )
     parser.add_argument(
         "--task_ids_file",

@@ -5,8 +5,7 @@ the solver model — no verification, no self-improvement.  Each task produces
 exactly ``num_solutions`` LLM calls.
 
 Tasks are processed concurrently using a thread pool.  Each task writes its
-own per-task JSONL log and candidates JSON — there is no shared global output
-file.
+own per-task JSONL log — there is no shared global output file.
 
 Usage::
 
@@ -359,29 +358,10 @@ def generate_all_candidates(
 # ---------------------------------------------------------------------------
 
 
-def candidate_to_dict(candidate: Candidate) -> dict[str, Any]:
-    """Serialise a :class:`Candidate` to a JSON-compatible dict.
-
-    The ``completion`` field is converted via ``model_dump()`` when present.
-
-    Args:
-        candidate: The candidate to serialise.
-
-    Returns:
-        A JSON-serialisable dictionary.
-
-    """
-    return {
-        "index": candidate.index,
-        "solution_text": candidate.solution_text,
-        "completion": candidate.completion.model_dump() if candidate.completion is not None else None,
-    }
-
-
 def is_task_done(output_dir: Path, task_id: int) -> bool:
-    """Return True if the task output JSON already exists.
+    """Return True if the task LLM outputs JSONL already exists.
 
-    A non-empty ``Task_{task_id}_candidates.json`` indicates that the task
+    A non-empty ``Task_{task_id}_llm_outputs.jsonl`` indicates that the task
     was successfully completed in a previous run and can be skipped.
 
     Args:
@@ -389,11 +369,11 @@ def is_task_done(output_dir: Path, task_id: int) -> bool:
         task_id: Task identifier.
 
     Returns:
-        True if the candidates JSON file exists and is non-empty.
+        True if the LLM outputs JSONL file exists and is non-empty.
 
     """
-    candidates_file = output_dir / f"Task_{task_id}_candidates.json"
-    return candidates_file.exists() and candidates_file.stat().st_size > 0
+    llm_log_file = output_dir / f"Task_{task_id}_llm_outputs.jsonl"
+    return llm_log_file.exists() and llm_log_file.stat().st_size > 0
 
 
 def generate_and_save(
@@ -403,13 +383,13 @@ def generate_and_save(
     config: GenerateBaselineConfig,
     output_dir: Path,
 ) -> dict[str, Any]:
-    """Generate all candidates for one task and persist them to JSON.
+    """Generate all candidates for one task and persist LLM calls to JSONL.
 
-    Produces two files per task:
+    Produces one file per task:
 
-    - ``Task_{task_id}_candidates.json`` — full candidate data including
-      solution texts and completions.
-    - ``Task_{task_id}_llm_outputs.jsonl`` — raw LLM call log.
+    - ``Task_{task_id}_llm_outputs.jsonl`` — per-call LLM log containing
+      the full completion, response text, messages, and metadata for every
+      candidate generation call.
 
     Each task uses its own JSONL log file, so this function is safe to call
     from multiple threads concurrently (no shared file handles).
@@ -427,31 +407,17 @@ def generate_and_save(
     llm_log_path = output_dir / f"Task_{task_id}_llm_outputs.jsonl"
     call_logger = TaskCallLogger(task_id=task_id, task_log_path=llm_log_path)
 
-    candidates, candidate_payloads = generate_all_candidates(
+    candidates, _candidate_payloads = generate_all_candidates(
         task_id=task_id,
         problem_statement=problem_statement,
         config=config,
         call_logger=call_logger,
     )
 
-    output_payload: dict[str, Any] = {
-        "task_id": task_id,
-        "generated_at": utc_now_iso(),
-        "config": asdict(config),
-        "problem_statement": problem_statement,
-        "num_candidates": len(candidates),
-        "candidates": [candidate_to_dict(c) for c in candidates],
-        "candidate_payloads": candidate_payloads,
-    }
-
-    candidates_file = output_dir / f"Task_{task_id}_candidates.json"
-    write_json(candidates_file, output_payload)
-
-    LOGGER.info("Task %s: saved %s candidates to %s", task_id, len(candidates), candidates_file)
+    LOGGER.info("Task %s: saved %s candidates to %s", task_id, len(candidates), llm_log_path)
     return {
         "task_id": task_id,
         "status": "success",
-        "candidates_path": str(candidates_file),
         "llm_outputs_path": str(llm_log_path),
     }
 
@@ -507,8 +473,7 @@ def run_tasks_concurrent(
 
     Tasks are submitted to a :class:`ThreadPoolExecutor` and processed
     concurrently up to ``concurrency`` threads.  Each task writes to its own
-    pair of output files (candidates JSON + LLM JSONL), so there are no
-    shared file handles across threads.
+    JSONL log file, so there are no shared file handles across threads.
 
     Args:
         task_ids: Ordered list of task identifiers to process.
