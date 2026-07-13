@@ -457,9 +457,7 @@ def run_match(  # noqa: PLR0913
     merge_prompt = build_tournament_merge_prompt(
         problem=problem_statement,
         solution_1=candidate_a.solution_text,
-        verification_1=candidate_a.verification.verifier_output,
         solution_2=candidate_b.solution_text,
-        verification_2=candidate_b.verification.verifier_output,
     )
     merger_messages = [
         {"role": "system", "content": TOURNAMENT_MERGE_SYSTEM_PROMPT},

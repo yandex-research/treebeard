@@ -1,0 +1,406 @@
+"""Count cumulative completion tokens and mean accuracy per round.
+
+Reads baseline candidate-generation JSONL files (round 0) and self-improvement
+JSONL files (rounds 1..N), computes per-candidate cumulative completion tokens,
+and reports the average across all tasks and candidates for each round.
+
+When an evaluation directory is available (inside the rounds directory), the
+script also reports mean population accuracy for each self-improvement round.
+Round 0 (baseline / initial candidates) is not evaluated, so its accuracy is
+reported as ``NaN``.
+
+The output is a table::
+
+    round  avg_cumulative_tokens  mean_accuracy
+    0                  25000.0            NaN
+    1                  42000.0          0.750
+    ...
+
+Usage::
+
+    uv run python -m open_deep_think.scripts.ablations.count_tokens \
+        --candidates_dir data/ablations/subset_baseline_candidates_gpt_oss \
+        --rounds_dir data/ablations/ablation_self_improve_no_verification_gpt_oss
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import re
+import sys
+from collections import defaultdict
+from pathlib import Path
+from typing import Any
+
+
+def _extract_task_id(filename: str, pattern: re.Pattern[str]) -> int | None:
+    """Extract integer task ID from a filename using *pattern*.
+
+    Returns ``None`` if the filename does not match.
+    """
+    match = pattern.search(filename)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _get_completion_tokens(record: dict[str, Any]) -> int:
+    """Extract ``completion_tokens`` from an LLM-call record.
+
+    Handles both dict and string forms of the ``completion`` field.
+    Returns ``0`` when the field is missing or ``None``.
+    """
+    completion = record.get("completion")
+    if completion is None:
+        return 0
+    if isinstance(completion, str):
+        completion = json.loads(completion)
+    usage = completion.get("usage")
+    if usage is None:
+        return 0
+    return usage.get("completion_tokens", 0)
+
+
+def load_baseline_tokens(
+    candidates_dir: Path,
+) -> dict[int, dict[int, int]]:
+    """Load per-candidate completion tokens from baseline JSONL files.
+
+    Args:
+        candidates_dir: Directory containing ``Task_{id}_llm_outputs.jsonl``.
+
+    Returns:
+        Mapping ``{task_id: {candidate_index: completion_tokens}}``.
+
+    """
+    pattern = re.compile(r"Task_(\d+)_llm_outputs\.jsonl$")
+    tokens: dict[int, dict[int, int]] = {}
+
+    for path in sorted(candidates_dir.iterdir()):
+        task_id = _extract_task_id(path.name, pattern)
+        if task_id is None:
+            continue
+
+        task_tokens: dict[int, int] = {}
+        for line in path.read_text(encoding="utf-8").strip().splitlines():
+            record = json.loads(line)
+            # Only count llm_call records (baseline files may lack record_type).
+            record_type = record.get("record_type", "llm_call")
+            if record_type != "llm_call":
+                continue
+            candidate_idx = record.get("candidate_index")
+            if candidate_idx is None:
+                continue
+            ct = _get_completion_tokens(record)
+            task_tokens[candidate_idx] = task_tokens.get(candidate_idx, 0) + ct
+
+        tokens[task_id] = task_tokens
+
+    return tokens
+
+
+def load_round_tokens(
+    rounds_dir: Path,
+) -> dict[int, dict[int, dict[int, int]]]:
+    """Load per-candidate, per-round completion tokens from self-improvement JSONL files.
+
+    Args:
+        rounds_dir: Directory containing ``Task_{id}_self_improve.jsonl``.
+
+    Returns:
+        Mapping ``{task_id: {candidate_index: {round_index: completion_tokens}}}``.
+
+    """
+    pattern = re.compile(r"Task_(\d+)_self_improve\.jsonl$")
+    tokens: dict[int, dict[int, dict[int, int]]] = {}
+
+    for path in sorted(rounds_dir.iterdir()):
+        task_id = _extract_task_id(path.name, pattern)
+        if task_id is None:
+            continue
+
+        task_tokens: dict[int, dict[int, int]] = defaultdict(lambda: defaultdict(int))
+        for line in path.read_text(encoding="utf-8").strip().splitlines():
+            record = json.loads(line)
+            if record.get("record_type") != "llm_call":
+                continue
+            candidate_idx = record.get("candidate_index")
+            round_idx = record.get("round_index")
+            if candidate_idx is None or round_idx is None:
+                continue
+            ct = _get_completion_tokens(record)
+            task_tokens[candidate_idx][round_idx] += ct
+
+        # Convert nested defaultdicts to plain dicts for safety.
+        tokens[task_id] = {cand: dict(rounds) for cand, rounds in task_tokens.items()}
+
+    return tokens
+
+
+def load_evaluation_verdicts(
+    eval_dir: Path,
+) -> dict[int, dict[int, dict[int, bool]]]:
+    """Load per-candidate, per-round evaluation verdicts from JSON files.
+
+    Each evaluation file contains a ``details`` list with entries keyed by
+    ``(task_id, candidate_index, round_index)`` and a boolean ``verdict``.
+
+    Args:
+        eval_dir: Directory containing ``Task_{id}_evaluation.json`` files.
+
+    Returns:
+        Mapping ``{task_id: {candidate_index: {round_index: verdict}}}``.
+
+    """
+    pattern = re.compile(r"Task_(\d+)_evaluation\.json$")
+    verdicts: dict[int, dict[int, dict[int, bool]]] = {}
+
+    for path in sorted(eval_dir.iterdir()):
+        task_id = _extract_task_id(path.name, pattern)
+        if task_id is None:
+            continue
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+        task_verdicts: dict[int, dict[int, bool]] = defaultdict(dict)
+
+        for detail in data.get("details", []):
+            cand_idx = detail.get("candidate_index")
+            round_idx = detail.get("round_index")
+            verdict = detail.get("verdict")
+            if cand_idx is not None and round_idx is not None and verdict is not None:
+                task_verdicts[cand_idx][round_idx] = bool(verdict)
+
+        verdicts[task_id] = dict(task_verdicts)
+
+    return verdicts
+
+
+def compute_cumulative_table(
+    baseline_tokens: dict[int, dict[int, int]],
+    round_tokens: dict[int, dict[int, dict[int, int]]],
+) -> list[tuple[int, float]]:
+    """Compute average cumulative completion tokens per round.
+
+    Round 0 uses only baseline tokens.  Round *i* (i >= 1) adds
+    self-improvement round ``i - 1`` tokens to the previous cumulative
+    total.
+
+    The average is taken across all (task, candidate) pairs that are
+    present in **both** the baseline and the rounds directories.
+
+    Args:
+        baseline_tokens: ``{task_id: {candidate_index: tokens}}`` from baseline.
+        round_tokens: ``{task_id: {candidate_index: {round_index: tokens}}}``
+            from self-improvement.
+
+    Returns:
+        Sorted list of ``(round_number, avg_cumulative_tokens)`` tuples.
+
+    """
+    # Find common task IDs.
+    common_tasks = sorted(set(baseline_tokens) & set(round_tokens))
+    if not common_tasks:
+        return []
+
+    # Determine the maximum round_index across all tasks/candidates.
+    max_round_idx = 0
+    for task_id in common_tasks:
+        for cand_rounds in round_tokens[task_id].values():
+            if cand_rounds:
+                max_round_idx = max(max_round_idx, *cand_rounds)
+
+    n_rounds = max_round_idx + 1  # self-improvement rounds (0-indexed)
+    total_output_rounds = n_rounds + 1  # +1 for baseline (round 0)
+
+    # Accumulate per-round sums and counts.
+    round_sums: list[float] = [0.0] * total_output_rounds
+    round_counts: list[int] = [0] * total_output_rounds
+
+    for task_id in common_tasks:
+        baseline_cands = baseline_tokens[task_id]
+        round_cands = round_tokens[task_id]
+
+        # Only process candidates present in both.
+        common_cands = sorted(set(baseline_cands) & set(round_cands))
+        for cand_idx in common_cands:
+            cumulative = baseline_cands[cand_idx]
+            round_sums[0] += cumulative
+            round_counts[0] += 1
+
+            cand_rounds = round_cands[cand_idx]
+            for ri in range(n_rounds):
+                cumulative += cand_rounds.get(ri, 0)
+                round_sums[ri + 1] += cumulative
+                round_counts[ri + 1] += 1
+
+    table: list[tuple[int, float]] = []
+    for r in range(total_output_rounds):
+        avg = round_sums[r] / round_counts[r] if round_counts[r] > 0 else 0.0
+        table.append((r, avg))
+
+    return table
+
+
+def compute_accuracy_per_round(
+    eval_verdicts: dict[int, dict[int, dict[int, bool]]],
+    n_output_rounds: int,
+) -> list[float]:
+    """Compute mean accuracy for each output round from evaluation verdicts.
+
+    Output round 0 (baseline / initial candidates) is not evaluated, so
+    its accuracy is ``NaN``.  For output round *r* (r >= 1), accuracy is
+    the fraction of (task, candidate) pairs with a correct verdict at
+    evaluation ``round_index = r - 1``.
+
+    Args:
+        eval_verdicts: ``{task_id: {candidate_index: {round_index: verdict}}}``
+            loaded from evaluation JSON files.
+        n_output_rounds: Total number of output rounds (including round 0).
+
+    Returns:
+        List of mean accuracies, one per output round. Index 0 is always
+        ``NaN``.
+
+    """
+    accuracies: list[float] = [float("nan")] * n_output_rounds
+
+    for output_round in range(1, n_output_rounds):
+        eval_round = output_round - 1
+        correct_count = 0
+        total_count = 0
+
+        for cand_verdicts in eval_verdicts.values():
+            for round_verdicts in cand_verdicts.values():
+                if eval_round in round_verdicts:
+                    total_count += 1
+                    if round_verdicts[eval_round]:
+                        correct_count += 1
+
+        if total_count > 0:
+            accuracies[output_round] = correct_count / total_count
+
+    return accuracies
+
+
+def print_table(
+    table: list[tuple[int, float]],
+    accuracies: list[float] | None = None,
+) -> None:
+    """Print the round / avg_cumulative_tokens / mean_accuracy table to stdout.
+
+    Args:
+        table: List of ``(round_number, avg_cumulative_tokens)`` tuples.
+        accuracies: Optional list of mean accuracy values, one per round.
+            If ``None``, the accuracy column is omitted.
+
+    """
+    if accuracies is not None:
+        print(f"{'round':<8}{'avg_cumulative_tokens':>22}{'mean_accuracy':>16}")  # noqa: T201
+        print("-" * 46)  # noqa: T201
+        for i, (round_num, avg_tokens) in enumerate(table):
+            acc = accuracies[i] if i < len(accuracies) else float("nan")
+            acc_str = "NaN" if math.isnan(acc) else f"{acc:.4f}"
+            print(f"{round_num:<8}{avg_tokens:>22.1f}{acc_str:>16}")  # noqa: T201
+    else:
+        print(f"{'round':<8}{'avg_cumulative_tokens':>22}")  # noqa: T201
+        print("-" * 30)  # noqa: T201
+        for round_num, avg_tokens in table:
+            print(f"{round_num:<8}{avg_tokens:>22.1f}")  # noqa: T201
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description=(
+            "Count cumulative completion tokens per round "
+            "(baseline + self-improvement) and report the average "
+            "across tasks and candidates, optionally with per-round accuracy."
+        ),
+    )
+    parser.add_argument(
+        "--candidates_dir",
+        type=str,
+        required=True,
+        help=(
+            "Directory with baseline LLM output JSONL files (e.g. data/ablations/subset_baseline_candidates_gpt_oss)."
+        ),
+    )
+    parser.add_argument(
+        "--rounds_dir",
+        type=str,
+        required=True,
+        help=(
+            "Directory with self-improvement JSONL files "
+            "(e.g. data/ablations/ablation_debug_self_improve_no_verification_gpt_oss)."
+        ),
+    )
+    parser.add_argument(
+        "--eval_dir",
+        type=str,
+        default=None,
+        help=(
+            "Directory with evaluation JSON files. If not specified, "
+            "defaults to ``{rounds_dir}/evaluation``. If the directory "
+            "does not exist, accuracy reporting is skipped."
+        ),
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    """Load token data from both directories and print the cumulative table."""
+    args = parse_args()
+
+    candidates_dir = Path(args.candidates_dir)
+    rounds_dir = Path(args.rounds_dir)
+
+    if not candidates_dir.is_dir():
+        print(f"Error: candidates_dir not found: {candidates_dir}", file=sys.stderr)  # noqa: T201
+        sys.exit(1)
+    if not rounds_dir.is_dir():
+        print(f"Error: rounds_dir not found: {rounds_dir}", file=sys.stderr)  # noqa: T201
+        sys.exit(1)
+
+    # Resolve evaluation directory.
+    eval_dir: Path | None = None
+    if args.eval_dir is not None:
+        eval_dir = Path(args.eval_dir)
+    else:
+        candidate_eval_dir = rounds_dir / "evaluation"
+        if candidate_eval_dir.is_dir():
+            eval_dir = candidate_eval_dir
+
+    baseline_tokens = load_baseline_tokens(candidates_dir)
+    round_tokens = load_round_tokens(rounds_dir)
+
+    if not baseline_tokens:
+        print("Error: no baseline JSONL files found.", file=sys.stderr)  # noqa: T201
+        sys.exit(1)
+    if not round_tokens:
+        print("Error: no self-improvement JSONL files found.", file=sys.stderr)  # noqa: T201
+        sys.exit(1)
+
+    table = compute_cumulative_table(baseline_tokens, round_tokens)
+    if not table:
+        print("Error: no common tasks found between baseline and rounds.", file=sys.stderr)  # noqa: T201
+        sys.exit(1)
+
+    # Compute per-round accuracy if evaluation data is available.
+    accuracies: list[float] | None = None
+    if eval_dir is not None and eval_dir.is_dir():
+        eval_verdicts = load_evaluation_verdicts(eval_dir)
+        if eval_verdicts:
+            accuracies = compute_accuracy_per_round(eval_verdicts, len(table))
+        else:
+            print(  # noqa: T201
+                "Warning: evaluation directory exists but contains no evaluation files.",
+                file=sys.stderr,
+            )
+
+    print_table(table, accuracies)
+
+
+if __name__ == "__main__":
+    main()

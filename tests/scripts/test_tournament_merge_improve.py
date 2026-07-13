@@ -136,18 +136,15 @@ def test_build_verification_prompt_missing_marker_uses_empty_solution() -> None:
 
 
 def test_build_tournament_merge_prompt_contains_all_sections() -> None:
+    """Merge prompt must contain the problem and both solutions."""
     prompt = build_tournament_merge_prompt(
         problem="Prove that 1+1=2.",
         solution_1="Solution A text.",
-        verification_1="Verification A text.",
         solution_2="Solution B text.",
-        verification_2="Verification B text.",
     )
     assert "Prove that 1+1=2." in prompt
     assert "Solution A text." in prompt
-    assert "Verification A text." in prompt
     assert "Solution B text." in prompt
-    assert "Verification B text." in prompt
 
 
 def test_build_tournament_merge_prompt_labels_solutions() -> None:
@@ -155,25 +152,20 @@ def test_build_tournament_merge_prompt_labels_solutions() -> None:
     prompt = build_tournament_merge_prompt(
         problem="P",
         solution_1="S1",
-        verification_1="V1",
         solution_2="S2",
-        verification_2="V2",
     )
     assert "Solution 1" in prompt
     assert "Solution 2" in prompt
 
 
-def test_build_tournament_merge_prompt_labels_verification_reports() -> None:
-    """The prompt must clearly label both verification reports."""
+def test_build_tournament_merge_prompt_no_verification_sections() -> None:
+    """The merge prompt must not contain verification report sections."""
     prompt = build_tournament_merge_prompt(
         problem="P",
         solution_1="S1",
-        verification_1="V1",
         solution_2="S2",
-        verification_2="V2",
     )
-    assert "Verification Report for Solution 1" in prompt
-    assert "Verification Report for Solution 2" in prompt
+    assert "Verification Report" not in prompt
 
 
 # ── TOURNAMENT_MERGE_SYSTEM_PROMPT ────────────────────────────────────────────
@@ -185,9 +177,9 @@ def test_tournament_merge_system_prompt_is_non_empty_string() -> None:
 
 
 def test_tournament_merge_system_prompt_mentions_merge_goal() -> None:
-    """The system prompt should instruct the model to synthesise / merge solutions."""
+    """The system prompt should instruct the model to aggregate / merge solutions."""
     lower = TOURNAMENT_MERGE_SYSTEM_PROMPT.lower()
-    assert "merge" in lower or "synthesis" in lower or "combin" in lower
+    assert "merge" in lower or "synthesis" in lower or "combin" in lower or "aggregate" in lower
 
 
 # ── TournamentMergeImproveConfig ──────────────────────────────────────────────
