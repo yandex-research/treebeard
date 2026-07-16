@@ -287,22 +287,10 @@ IMO25_BINARY_CORRECTNESS_PROMPT = 'Response in "yes" or "no". Is the following s
 
 
 TOURNAMENT_COMPARISON_SYSTEM_PROMPT = """
-You are an expert mathematician acting as a judge in a mathematical solution tournament.
-You will be given a problem and two candidate solutions, each accompanied by a verification report.
-Your task is to select the better solution.
-
-### Judging Criteria (in order of priority) ###
-
-1. **Correctness:** Prefer the solution whose verification report indicates it is correct or has fewer / less severe issues (Critical Errors outweigh Justification Gaps).
-2. **Completeness:** If correctness is equal, prefer the solution that is more complete (solves the full problem rather than a partial result).
-3. **Rigor and Clarity:** If both criteria above are equal, prefer the solution that is more rigorously argued and clearly presented.
-
-### Output Format ###
-
+You are given a math problem and two candidate solutions. Some candidates may be incorrect or contain errors.
+Compare them carefully and select the better one.
+Reason carefully; consider correctness, completeness, and rigor.
 Respond with **only** the digit `1` or `2` — nothing else.
-- Output `1` if Solution 1 is better.
-- Output `2` if Solution 2 is better.
-If the solutions are equally good, pick either one.
 """
 
 TOURNAMENT_COMPARISON_PROMPT_TEMPLATE = """
@@ -317,23 +305,13 @@ TOURNAMENT_COMPARISON_PROMPT_TEMPLATE = """
 {solution_1}
 
 ======================================================================
-### Verification Report for Solution 1 ###
-
-{verification_1}
-
-======================================================================
 ### Solution 2 ###
 
 {solution_2}
 
 ======================================================================
-### Verification Report for Solution 2 ###
 
-{verification_2}
-
-======================================================================
-
-Based on the problem, both solutions, and their verification reports, which solution is better?
+Based on the problem and both solutions, which solution is better?
 Respond with only `1` or `2`.
 """
 
@@ -341,18 +319,14 @@ Respond with only `1` or `2`.
 def build_tournament_comparison_prompt(
     problem: str,
     solution_1: str,
-    verification_1: str,
     solution_2: str,
-    verification_2: str,
 ) -> str:
     """Build the comparison prompt for a tournament match between two solutions.
 
     Args:
         problem: The original problem statement.
         solution_1: Full text of the first candidate solution.
-        verification_1: Verifier output for the first solution.
         solution_2: Full text of the second candidate solution.
-        verification_2: Verifier output for the second solution.
 
     Returns:
         Rendered prompt string for the judge model.
@@ -361,9 +335,7 @@ def build_tournament_comparison_prompt(
     return TOURNAMENT_COMPARISON_PROMPT_TEMPLATE.format(
         problem=problem,
         solution_1=solution_1,
-        verification_1=verification_1,
         solution_2=solution_2,
-        verification_2=verification_2,
     )
 
 

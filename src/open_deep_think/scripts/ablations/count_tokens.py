@@ -104,16 +104,22 @@ def load_baseline_tokens(
 def load_round_tokens(
     rounds_dir: Path,
 ) -> dict[int, dict[int, dict[int, int]]]:
-    """Load per-candidate, per-round completion tokens from self-improvement JSONL files.
+    """Load per-candidate, per-round completion tokens from round JSONL files.
+
+    Matches any ``Task_{id}_*.jsonl`` file in the directory, so it works
+    with both ``_self_improve.jsonl`` and ``_merge_candidates.jsonl``
+    naming conventions.
 
     Args:
-        rounds_dir: Directory containing ``Task_{id}_self_improve.jsonl``.
+        rounds_dir: Directory containing per-task JSONL files
+            (e.g. ``Task_{id}_self_improve.jsonl`` or
+            ``Task_{id}_merge_candidates.jsonl``).
 
     Returns:
         Mapping ``{task_id: {candidate_index: {round_index: completion_tokens}}}``.
 
     """
-    pattern = re.compile(r"Task_(\d+)_self_improve\.jsonl$")
+    pattern = re.compile(r"Task_(\d+)_.*\.jsonl$")
     tokens: dict[int, dict[int, dict[int, int]]] = {}
 
     for path in sorted(rounds_dir.iterdir()):
@@ -180,15 +186,14 @@ def load_evaluation_verdicts(
 def compute_cumulative_table(
     baseline_tokens: dict[int, dict[int, int]],
     round_tokens: dict[int, dict[int, dict[int, int]]],
-) -> list[tuple[int, float]]:
+) -> list[tuple[int, float, int]]:
     """Compute average cumulative completion tokens per round.
 
-    Round 0 uses only baseline tokens.  Round *i* (i >= 1) adds
-    self-improvement round ``i - 1`` tokens to the previous cumulative
-    total.
-
-    The average is taken across all (task, candidate) pairs that are
-    present in **both** the baseline and the rounds directories.
+    Round 0 uses **all** baseline candidates for common tasks, so that
+    the baseline cost is identical regardless of which rounds directory
+    is provided.  Round *i* (i >= 1) adds self-improvement round
+    ``i - 1`` tokens to the previous cumulative total; for these rounds
+    only candidates present in both directories are included.
 
     Args:
         baseline_tokens: ``{task_id: {candidate_index: tokens}}`` from baseline.
@@ -196,7 +201,9 @@ def compute_cumulative_table(
             from self-improvement.
 
     Returns:
-        Sorted list of ``(round_number, avg_cumulative_tokens)`` tuples.
+        Sorted list of ``(round_number, avg_cumulative_tokens, pair_count)``
+        tuples, where *pair_count* is the number of (task, candidate) pairs
+        used for averaging.
 
     """
     # Find common task IDs.
@@ -222,23 +229,25 @@ def compute_cumulative_table(
         baseline_cands = baseline_tokens[task_id]
         round_cands = round_tokens[task_id]
 
-        # Only process candidates present in both.
+        # Round 0: use ALL baseline candidates (not filtered by rounds dir).
+        for cand_idx in sorted(baseline_cands):
+            round_sums[0] += baseline_cands[cand_idx]
+            round_counts[0] += 1
+
+        # Rounds 1..N: only candidates present in both.
         common_cands = sorted(set(baseline_cands) & set(round_cands))
         for cand_idx in common_cands:
             cumulative = baseline_cands[cand_idx]
-            round_sums[0] += cumulative
-            round_counts[0] += 1
-
             cand_rounds = round_cands[cand_idx]
             for ri in range(n_rounds):
                 cumulative += cand_rounds.get(ri, 0)
                 round_sums[ri + 1] += cumulative
                 round_counts[ri + 1] += 1
 
-    table: list[tuple[int, float]] = []
+    table: list[tuple[int, float, int]] = []
     for r in range(total_output_rounds):
         avg = round_sums[r] / round_counts[r] if round_counts[r] > 0 else 0.0
-        table.append((r, avg))
+        table.append((r, avg, round_counts[r]))
 
     return table
 
@@ -285,29 +294,34 @@ def compute_accuracy_per_round(
 
 
 def print_table(
-    table: list[tuple[int, float]],
+    table: list[tuple[int, float, int]],
     accuracies: list[float] | None = None,
 ) -> None:
-    """Print the round / avg_cumulative_tokens / mean_accuracy table to stdout.
+    """Print the round / avg_cumulative_tokens / count / mean_accuracy table.
 
     Args:
-        table: List of ``(round_number, avg_cumulative_tokens)`` tuples.
+        table: List of ``(round_number, avg_cumulative_tokens, pair_count)``
+            tuples.
         accuracies: Optional list of mean accuracy values, one per round.
             If ``None``, the accuracy column is omitted.
 
     """
     if accuracies is not None:
-        print(f"{'round':<8}{'avg_cumulative_tokens':>22}{'mean_accuracy':>16}")  # noqa: T201
-        print("-" * 46)  # noqa: T201
-        for i, (round_num, avg_tokens) in enumerate(table):
+        print(  # noqa: T201
+            f"{'round':<8}{'avg_cumulative_tokens':>22}{'n_pairs':>10}{'mean_accuracy':>16}"
+        )
+        print("-" * 56)  # noqa: T201
+        for i, (round_num, avg_tokens, count) in enumerate(table):
             acc = accuracies[i] if i < len(accuracies) else float("nan")
             acc_str = "NaN" if math.isnan(acc) else f"{acc:.4f}"
-            print(f"{round_num:<8}{avg_tokens:>22.1f}{acc_str:>16}")  # noqa: T201
+            print(  # noqa: T201
+                f"{round_num:<8}{avg_tokens:>22.1f}{count:>10}{acc_str:>16}"
+            )
     else:
-        print(f"{'round':<8}{'avg_cumulative_tokens':>22}")  # noqa: T201
-        print("-" * 30)  # noqa: T201
-        for round_num, avg_tokens in table:
-            print(f"{round_num:<8}{avg_tokens:>22.1f}")  # noqa: T201
+        print(f"{'round':<8}{'avg_cumulative_tokens':>22}{'n_pairs':>10}")  # noqa: T201
+        print("-" * 40)  # noqa: T201
+        for round_num, avg_tokens, count in table:
+            print(f"{round_num:<8}{avg_tokens:>22.1f}{count:>10}")  # noqa: T201
 
 
 def parse_args() -> argparse.Namespace:
