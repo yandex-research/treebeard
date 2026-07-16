@@ -4,15 +4,17 @@ Reads baseline candidate-generation JSONL files (round 0) and self-improvement
 JSONL files (rounds 1..N), computes per-candidate cumulative completion tokens,
 and reports the average across all tasks and candidates for each round.
 
-When an evaluation directory is available (inside the rounds directory), the
-script also reports mean population accuracy for each self-improvement round.
-Round 0 (baseline / initial candidates) is not evaluated, so its accuracy is
-reported as ``NaN``.
+When an evaluation directory is available inside the candidates directory
+(``candidates_dir/evaluation``), the script reports mean population accuracy
+for round 0 (baseline).  When an evaluation directory is available inside the
+rounds directory (``rounds_dir/evaluation``), the script reports mean accuracy
+for each self-improvement round.  If either evaluation directory is absent,
+the corresponding accuracy values are reported as ``NaN``.
 
 The output is a table::
 
     round  avg_cumulative_tokens  mean_accuracy
-    0                  25000.0            NaN
+    0                  25000.0          0.650
     1                  42000.0          0.750
     ...
 
@@ -183,6 +185,75 @@ def load_evaluation_verdicts(
     return verdicts
 
 
+def load_baseline_evaluation_verdicts(
+    eval_dir: Path,
+) -> dict[int, dict[int, bool]]:
+    """Load per-candidate baseline evaluation verdicts from JSON files.
+
+    Baseline evaluation files contain ``details`` entries where
+    ``round_index`` is ``null`` (baseline candidates have no round).
+    Each entry has a ``candidate_index`` and a boolean ``verdict``.
+
+    Args:
+        eval_dir: Directory containing ``Task_{id}_evaluation.json`` files
+            for baseline candidates.
+
+    Returns:
+        Mapping ``{task_id: {candidate_index: verdict}}``.
+
+    """
+    pattern = re.compile(r"Task_(\d+)_evaluation\.json$")
+    verdicts: dict[int, dict[int, bool]] = {}
+
+    for path in sorted(eval_dir.iterdir()):
+        task_id = _extract_task_id(path.name, pattern)
+        if task_id is None:
+            continue
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+        task_verdicts: dict[int, bool] = {}
+
+        for detail in data.get("details", []):
+            cand_idx = detail.get("candidate_index")
+            verdict = detail.get("verdict")
+            if cand_idx is not None and verdict is not None:
+                task_verdicts[cand_idx] = bool(verdict)
+
+        if task_verdicts:
+            verdicts[task_id] = task_verdicts
+
+    return verdicts
+
+
+def compute_baseline_accuracy(
+    baseline_verdicts: dict[int, dict[int, bool]],
+) -> float:
+    """Compute mean accuracy across all candidates and tasks for baseline.
+
+    Args:
+        baseline_verdicts: ``{task_id: {candidate_index: verdict}}``
+            loaded from baseline evaluation JSON files.
+
+    Returns:
+        Mean accuracy (fraction of correct verdicts) across all
+        (task, candidate) pairs.  Returns ``NaN`` if no verdicts are
+        available.
+
+    """
+    correct_count = 0
+    total_count = 0
+
+    for cand_verdicts in baseline_verdicts.values():
+        for verdict in cand_verdicts.values():
+            total_count += 1
+            if verdict:
+                correct_count += 1
+
+    if total_count == 0:
+        return float("nan")
+    return correct_count / total_count
+
+
 def compute_cumulative_table(
     baseline_tokens: dict[int, dict[int, int]],
     round_tokens: dict[int, dict[int, dict[int, int]]],
@@ -255,25 +326,29 @@ def compute_cumulative_table(
 def compute_accuracy_per_round(
     eval_verdicts: dict[int, dict[int, dict[int, bool]]],
     n_output_rounds: int,
+    baseline_accuracy: float = float("nan"),
 ) -> list[float]:
     """Compute mean accuracy for each output round from evaluation verdicts.
 
-    Output round 0 (baseline / initial candidates) is not evaluated, so
-    its accuracy is ``NaN``.  For output round *r* (r >= 1), accuracy is
-    the fraction of (task, candidate) pairs with a correct verdict at
-    evaluation ``round_index = r - 1``.
+    Output round 0 (baseline / initial candidates) uses
+    ``baseline_accuracy`` which is computed separately from the
+    candidates evaluation directory.  For output round *r* (r >= 1),
+    accuracy is the fraction of (task, candidate) pairs with a correct
+    verdict at evaluation ``round_index = r - 1``.
 
     Args:
         eval_verdicts: ``{task_id: {candidate_index: {round_index: verdict}}}``
             loaded from evaluation JSON files.
         n_output_rounds: Total number of output rounds (including round 0).
+        baseline_accuracy: Pre-computed accuracy for round 0 (baseline).
+            Defaults to ``NaN`` when no baseline evaluation is available.
 
     Returns:
-        List of mean accuracies, one per output round. Index 0 is always
-        ``NaN``.
+        List of mean accuracies, one per output round.
 
     """
     accuracies: list[float] = [float("nan")] * n_output_rounds
+    accuracies[0] = baseline_accuracy
 
     for output_round in range(1, n_output_rounds):
         eval_round = output_round - 1
@@ -355,12 +430,69 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help=(
-            "Directory with evaluation JSON files. If not specified, "
-            "defaults to ``{rounds_dir}/evaluation``. If the directory "
-            "does not exist, accuracy reporting is skipped."
+            "Directory with round-level evaluation JSON files. If not "
+            "specified, defaults to ``{rounds_dir}/evaluation``. If the "
+            "directory does not exist, round accuracy reporting is skipped. "
+            "Baseline (round 0) accuracy is always read from "
+            "``{candidates_dir}/evaluation`` when available."
         ),
     )
     return parser.parse_args()
+
+
+def _resolve_accuracies(
+    candidates_dir: Path,
+    rounds_eval_dir: Path | None,
+    n_rounds: int,
+) -> list[float] | None:
+    """Resolve per-round accuracy values from evaluation directories.
+
+    Baseline (round 0) accuracy is read from ``candidates_dir/evaluation``.
+    Rounds 1..N accuracy is read from *rounds_eval_dir*.  Returns ``None``
+    when neither source is available, which suppresses the accuracy column
+    in the output table.
+
+    Args:
+        candidates_dir: Baseline candidates directory (may contain
+            ``evaluation/`` subfolder).
+        rounds_eval_dir: Directory with round-level evaluation files,
+            or ``None`` if unavailable.
+        n_rounds: Total number of output rounds (including round 0).
+
+    Returns:
+        List of accuracy values (one per round), or ``None`` if no
+        evaluation data is available at all.
+
+    """
+    # Compute baseline (round 0) accuracy from candidates evaluation.
+    baseline_acc = float("nan")
+    baseline_eval_candidate = candidates_dir / "evaluation"
+    if baseline_eval_candidate.is_dir():
+        baseline_verdicts = load_baseline_evaluation_verdicts(baseline_eval_candidate)
+        if baseline_verdicts:
+            baseline_acc = compute_baseline_accuracy(baseline_verdicts)
+
+    has_any_accuracy = not math.isnan(baseline_acc)
+    accuracies: list[float] | None = None
+
+    # Compute per-round accuracy if evaluation data is available.
+    if rounds_eval_dir is not None and rounds_eval_dir.is_dir():
+        eval_verdicts = load_evaluation_verdicts(rounds_eval_dir)
+        if eval_verdicts:
+            accuracies = compute_accuracy_per_round(eval_verdicts, n_rounds, baseline_accuracy=baseline_acc)
+            has_any_accuracy = True
+        else:
+            print(  # noqa: T201
+                "Warning: evaluation directory exists but contains no evaluation files.",
+                file=sys.stderr,
+            )
+
+    # If we only have baseline accuracy (no rounds eval), still show accuracy column.
+    if accuracies is None and has_any_accuracy:
+        accuracies = [float("nan")] * n_rounds
+        accuracies[0] = baseline_acc
+
+    return accuracies
 
 
 def main() -> None:
@@ -377,14 +509,14 @@ def main() -> None:
         print(f"Error: rounds_dir not found: {rounds_dir}", file=sys.stderr)  # noqa: T201
         sys.exit(1)
 
-    # Resolve evaluation directory.
-    eval_dir: Path | None = None
+    # Resolve rounds evaluation directory.
+    rounds_eval_dir: Path | None = None
     if args.eval_dir is not None:
-        eval_dir = Path(args.eval_dir)
+        rounds_eval_dir = Path(args.eval_dir)
     else:
         candidate_eval_dir = rounds_dir / "evaluation"
         if candidate_eval_dir.is_dir():
-            eval_dir = candidate_eval_dir
+            rounds_eval_dir = candidate_eval_dir
 
     baseline_tokens = load_baseline_tokens(candidates_dir)
     round_tokens = load_round_tokens(rounds_dir)
@@ -401,18 +533,7 @@ def main() -> None:
         print("Error: no common tasks found between baseline and rounds.", file=sys.stderr)  # noqa: T201
         sys.exit(1)
 
-    # Compute per-round accuracy if evaluation data is available.
-    accuracies: list[float] | None = None
-    if eval_dir is not None and eval_dir.is_dir():
-        eval_verdicts = load_evaluation_verdicts(eval_dir)
-        if eval_verdicts:
-            accuracies = compute_accuracy_per_round(eval_verdicts, len(table))
-        else:
-            print(  # noqa: T201
-                "Warning: evaluation directory exists but contains no evaluation files.",
-                file=sys.stderr,
-            )
-
+    accuracies = _resolve_accuracies(candidates_dir, rounds_eval_dir, len(table))
     print_table(table, accuracies)
 
 
