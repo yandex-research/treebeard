@@ -475,9 +475,7 @@ def run_match(  # noqa: PLR0913
     comparison_prompt = build_tournament_comparison_prompt(
         problem=problem_statement,
         solution_1=candidate_a.solution_text,
-        verification_1=candidate_a.verification.verifier_output,
         solution_2=candidate_b.solution_text,
-        verification_2=candidate_b.verification.verifier_output,
     )
     judge_messages = [
         {"role": "system", "content": TOURNAMENT_COMPARISON_SYSTEM_PROMPT},

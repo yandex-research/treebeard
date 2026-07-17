@@ -44,7 +44,7 @@ LOGGER = logging.getLogger(__name__)
 # Add or remove phase names here to control what gets evaluated.
 # ---------------------------------------------------------------------------
 PHASES_TO_EVALUATE: list[str] = [
-    "initial_solution",
+    "merge",
 ]
 
 # Regex to extract task_id from filenames like ``Task_42_self_improve.jsonl``.

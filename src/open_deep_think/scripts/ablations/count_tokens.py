@@ -1,4 +1,4 @@
-"""Count cumulative completion tokens and mean accuracy per round.
+"""Count cumulative completion tokens, mean accuracy, and accuracy std per round.
 
 Reads baseline candidate-generation JSONL files (round 0) and self-improvement
 JSONL files (rounds 1..N), computes per-candidate cumulative completion tokens,
@@ -6,16 +6,22 @@ and reports the average across all tasks and candidates for each round.
 
 When an evaluation directory is available inside the candidates directory
 (``candidates_dir/evaluation``), the script reports mean population accuracy
-for round 0 (baseline).  When an evaluation directory is available inside the
-rounds directory (``rounds_dir/evaluation``), the script reports mean accuracy
-for each self-improvement round.  If either evaluation directory is absent,
-the corresponding accuracy values are reported as ``NaN``.
+and std of accuracy for round 0 (baseline).  When an evaluation directory is
+available inside the rounds directory (``rounds_dir/evaluation``), the script
+reports mean accuracy and std for each self-improvement round.  If either
+evaluation directory is absent, the corresponding values are reported as
+``NaN``.
+
+The accuracy std is computed as follows: for each candidate, compute its mean
+accuracy across all tasks (fraction of tasks solved correctly) on a given
+round, then report the population standard deviation of these per-candidate
+mean accuracies across all candidates.
 
 The output is a table::
 
-    round  avg_cumulative_tokens  mean_accuracy
-    0                  25000.0          0.650
-    1                  42000.0          0.750
+    round  avg_cumulative_tokens  mean_accuracy  std_accuracy
+    0                  25000.0          0.650          0.4770
+    1                  42000.0          0.750          0.4330
     ...
 
 Usage::
@@ -63,6 +69,19 @@ def _get_completion_tokens(record: dict[str, Any]) -> int:
     if usage is None:
         return 0
     return usage.get("completion_tokens", 0)
+
+
+def _population_std(values: list[float]) -> float:
+    """Compute the population standard deviation of *values*.
+
+    Returns ``0.0`` for empty lists or single-element lists.
+    """
+    n = len(values)
+    if n <= 1:
+        return 0.0
+    mean = sum(values) / n
+    variance = sum((v - mean) ** 2 for v in values) / n
+    return math.sqrt(variance)
 
 
 def load_baseline_tokens(
@@ -254,6 +273,44 @@ def compute_baseline_accuracy(
     return correct_count / total_count
 
 
+def compute_baseline_accuracy_std(
+    baseline_verdicts: dict[int, dict[int, bool]],
+) -> float:
+    """Compute std of per-candidate mean accuracy across candidates for baseline.
+
+    For each candidate, the mean accuracy across all tasks (fraction of
+    tasks solved correctly) is computed.  The returned value is the
+    population standard deviation of these per-candidate mean accuracies.
+
+    This treats each candidate as an independent observation (seed) and
+    measures how much per-candidate accuracy varies across candidates.
+
+    Args:
+        baseline_verdicts: ``{task_id: {candidate_index: verdict}}``
+            loaded from baseline evaluation JSON files.
+
+    Returns:
+        Population std of per-candidate mean accuracies.  Returns ``NaN``
+        if no candidates have verdicts.
+
+    """
+    if not baseline_verdicts:
+        return float("nan")
+
+    # Collect per-candidate verdicts across tasks: {candidate_index: [verdict, ...]}.
+    cand_task_verdicts: dict[int, list[float]] = defaultdict(list)
+    for task_verdicts in baseline_verdicts.values():
+        for cand_idx, verdict in task_verdicts.items():
+            cand_task_verdicts[cand_idx].append(1.0 if verdict else 0.0)
+
+    if not cand_task_verdicts:
+        return float("nan")
+
+    # Per-candidate mean accuracy.
+    cand_means = [sum(vs) / len(vs) for vs in cand_task_verdicts.values()]
+    return _population_std(cand_means)
+
+
 def compute_cumulative_table(
     baseline_tokens: dict[int, dict[int, int]],
     round_tokens: dict[int, dict[int, dict[int, int]]],
@@ -368,30 +425,89 @@ def compute_accuracy_per_round(
     return accuracies
 
 
+def compute_accuracy_std_per_round(
+    eval_verdicts: dict[int, dict[int, dict[int, bool]]],
+    n_output_rounds: int,
+    baseline_std: float = float("nan"),
+) -> list[float]:
+    """Compute std of per-candidate mean accuracy for each output round.
+
+    For each output round *r* (r >= 1, corresponding to evaluation
+    ``round_index = r - 1``), this function computes per-candidate mean
+    accuracy across tasks, then returns the population standard deviation
+    of these per-candidate means.
+
+    This treats each candidate as an independent observation (seed) and
+    measures how much per-candidate accuracy varies across candidates.
+
+    Output round 0 uses the pre-computed ``baseline_std``.
+
+    Args:
+        eval_verdicts: ``{task_id: {candidate_index: {round_index: verdict}}}``
+            loaded from evaluation JSON files.
+        n_output_rounds: Total number of output rounds (including round 0).
+        baseline_std: Pre-computed std for round 0 (baseline).
+            Defaults to ``NaN`` when no baseline evaluation is available.
+
+    Returns:
+        List of per-candidate accuracy standard deviations, one per
+        output round.
+
+    """
+    stds: list[float] = [float("nan")] * n_output_rounds
+    stds[0] = baseline_std
+
+    for output_round in range(1, n_output_rounds):
+        eval_round = output_round - 1
+
+        # Collect per-candidate verdicts across tasks: {cand_idx: [verdict, ...]}.
+        cand_task_verdicts: dict[int, list[float]] = defaultdict(list)
+        for cand_verdicts in eval_verdicts.values():
+            for cand_idx, round_verdicts in cand_verdicts.items():
+                if eval_round in round_verdicts:
+                    cand_task_verdicts[cand_idx].append(1.0 if round_verdicts[eval_round] else 0.0)
+
+        if cand_task_verdicts:
+            cand_means = [sum(vs) / len(vs) for vs in cand_task_verdicts.values()]
+            stds[output_round] = _population_std(cand_means)
+
+    return stds
+
+
 def print_table(
     table: list[tuple[int, float, int]],
     accuracies: list[float] | None = None,
+    accuracy_stds: list[float] | None = None,
 ) -> None:
-    """Print the round / avg_cumulative_tokens / count / mean_accuracy table.
+    """Print the round / avg_cumulative_tokens / count / mean_accuracy / std_accuracy table.
 
     Args:
         table: List of ``(round_number, avg_cumulative_tokens, pair_count)``
             tuples.
         accuracies: Optional list of mean accuracy values, one per round.
             If ``None``, the accuracy column is omitted.
+        accuracy_stds: Optional list of accuracy std values, one per round.
+            If ``None``, the std column is omitted.
 
     """
     if accuracies is not None:
-        print(  # noqa: T201
-            f"{'round':<8}{'avg_cumulative_tokens':>22}{'n_pairs':>10}{'mean_accuracy':>16}"
-        )
-        print("-" * 56)  # noqa: T201
+        has_std = accuracy_stds is not None
+        header = f"{'round':<8}{'avg_cumulative_tokens':>22}{'n_pairs':>10}{'mean_accuracy':>16}"
+        sep_len = 56
+        if has_std:
+            header += f"{'std_accuracy':>16}"
+            sep_len += 16
+        print(header)  # noqa: T201
+        print("-" * sep_len)  # noqa: T201
         for i, (round_num, avg_tokens, count) in enumerate(table):
             acc = accuracies[i] if i < len(accuracies) else float("nan")
             acc_str = "NaN" if math.isnan(acc) else f"{acc:.4f}"
-            print(  # noqa: T201
-                f"{round_num:<8}{avg_tokens:>22.1f}{count:>10}{acc_str:>16}"
-            )
+            line = f"{round_num:<8}{avg_tokens:>22.1f}{count:>10}{acc_str:>16}"
+            if has_std:
+                std_val = accuracy_stds[i] if i < len(accuracy_stds) else float("nan")
+                std_str = "NaN" if math.isnan(std_val) else f"{std_val:.4f}"
+                line += f"{std_str:>16}"
+            print(line)  # noqa: T201
     else:
         print(f"{'round':<8}{'avg_cumulative_tokens':>22}{'n_pairs':>10}")  # noqa: T201
         print("-" * 40)  # noqa: T201
@@ -444,13 +560,14 @@ def _resolve_accuracies(
     candidates_dir: Path,
     rounds_eval_dir: Path | None,
     n_rounds: int,
-) -> list[float] | None:
-    """Resolve per-round accuracy values from evaluation directories.
+) -> tuple[list[float] | None, list[float] | None]:
+    """Resolve per-round accuracy values and stds from evaluation directories.
 
-    Baseline (round 0) accuracy is read from ``candidates_dir/evaluation``.
-    Rounds 1..N accuracy is read from *rounds_eval_dir*.  Returns ``None``
-    when neither source is available, which suppresses the accuracy column
-    in the output table.
+    Baseline (round 0) accuracy and std are read from
+    ``candidates_dir/evaluation``.  Rounds 1..N accuracy and std are read
+    from *rounds_eval_dir*.  Returns ``(None, None)`` when neither source
+    is available, which suppresses the accuracy and std columns in the
+    output table.
 
     Args:
         candidates_dir: Baseline candidates directory (may contain
@@ -460,26 +577,30 @@ def _resolve_accuracies(
         n_rounds: Total number of output rounds (including round 0).
 
     Returns:
-        List of accuracy values (one per round), or ``None`` if no
-        evaluation data is available at all.
+        Tuple of ``(accuracies, accuracy_stds)``, each a list of values
+        (one per round) or ``None`` if no evaluation data is available.
 
     """
-    # Compute baseline (round 0) accuracy from candidates evaluation.
+    # Compute baseline (round 0) accuracy and std from candidates evaluation.
     baseline_acc = float("nan")
+    baseline_std = float("nan")
     baseline_eval_candidate = candidates_dir / "evaluation"
     if baseline_eval_candidate.is_dir():
         baseline_verdicts = load_baseline_evaluation_verdicts(baseline_eval_candidate)
         if baseline_verdicts:
             baseline_acc = compute_baseline_accuracy(baseline_verdicts)
+            baseline_std = compute_baseline_accuracy_std(baseline_verdicts)
 
     has_any_accuracy = not math.isnan(baseline_acc)
     accuracies: list[float] | None = None
+    accuracy_stds: list[float] | None = None
 
-    # Compute per-round accuracy if evaluation data is available.
+    # Compute per-round accuracy and std if evaluation data is available.
     if rounds_eval_dir is not None and rounds_eval_dir.is_dir():
         eval_verdicts = load_evaluation_verdicts(rounds_eval_dir)
         if eval_verdicts:
             accuracies = compute_accuracy_per_round(eval_verdicts, n_rounds, baseline_accuracy=baseline_acc)
+            accuracy_stds = compute_accuracy_std_per_round(eval_verdicts, n_rounds, baseline_std=baseline_std)
             has_any_accuracy = True
         else:
             print(  # noqa: T201
@@ -487,12 +608,14 @@ def _resolve_accuracies(
                 file=sys.stderr,
             )
 
-    # If we only have baseline accuracy (no rounds eval), still show accuracy column.
+    # If we only have baseline accuracy (no rounds eval), still show columns.
     if accuracies is None and has_any_accuracy:
         accuracies = [float("nan")] * n_rounds
         accuracies[0] = baseline_acc
+        accuracy_stds = [float("nan")] * n_rounds
+        accuracy_stds[0] = baseline_std
 
-    return accuracies
+    return accuracies, accuracy_stds
 
 
 def main() -> None:
@@ -533,8 +656,8 @@ def main() -> None:
         print("Error: no common tasks found between baseline and rounds.", file=sys.stderr)  # noqa: T201
         sys.exit(1)
 
-    accuracies = _resolve_accuracies(candidates_dir, rounds_eval_dir, len(table))
-    print_table(table, accuracies)
+    accuracies, accuracy_stds = _resolve_accuracies(candidates_dir, rounds_eval_dir, len(table))
+    print_table(table, accuracies, accuracy_stds)
 
 
 if __name__ == "__main__":
