@@ -1,19 +1,24 @@
-r"""Count cumulative completion tokens and accuracy per round for merge-compare.
+r"""Count cumulative completion tokens and accuracy per round for merge-improve-compare.
 
-Reads baseline candidate-generation JSONL files (round 0) and merge-compare
+Reads baseline candidate-generation JSONL files (round 0) and merge-improve-compare
 JSONL files (rounds 1..N), computes total cumulative completion tokens per task
 (summed across all candidates) averaged across tasks, and reports accuracy per
 round.
 
-Merge-compare data alternates between merge and comparison rounds:
+Merge-improve-compare data cycles through merge, self-improvement, and
+comparison rounds with period 3:
 
-- **Merge rounds** (even round indices 0, 2, 4, …): each candidate produces
+- **Merge rounds** (round indices 0, 3, 6, …): each candidate produces
   a merged solution.  Accuracy is computed directly from evaluation verdicts
   at that round index.
 
-- **Comparison rounds** (odd round indices 1, 3, 5, …): candidates are
+- **Improve rounds** (round indices 1, 4, 7, …): each candidate is
+  self-improved.  Accuracy is computed directly from evaluation verdicts
+  at that round index.
+
+- **Comparison rounds** (round indices 2, 5, 8, …): candidates are
   paired and a judge selects a winner.  Winners inherit the evaluation
-  verdict of their original candidate from the preceding merge round.
+  verdict of their original candidate from the preceding improve round.
 
 For token counts, all completion tokens for every LLM call in a given round
 are summed (no per-candidate normalisation) and accumulated across rounds.
@@ -24,14 +29,15 @@ The output is a table::
     round  type       avg_cumulative_tokens   n_tasks  mean_accuracy  std_accuracy
     0      baseline              25000.0         20          0.6500          0.4770
     1      merge                 42000.0         20          0.7500          0.4330
-    2      compare               43500.0         20          0.8000          0.4000
+    2      improve               55000.0         20          0.7800          0.4100
+    3      compare               56500.0         20          0.8000          0.4000
     ...
 
 Usage::
 
-    uv run python -m open_deep_think.scripts.ablations.count_tokens_merge_compare \\
+    uv run python -m open_deep_think.scripts.ablations.count_tokens_merge_improve_compare \\
         --candidates_dir data/ablations/subset_baseline_candidates_gpt_oss \\
-        --rounds_dir data/ablations/ablation_merge_compare_gpt_oss
+        --rounds_dir data/ablations/ablation_merge_improve_compare_gpt_oss
 """
 
 from __future__ import annotations
@@ -62,23 +68,31 @@ from open_deep_think.scripts.ablations.count_tokens import (
 _SOLUTION_1 = 1
 _SOLUTION_2 = 2
 
+# Round type constants (cycle with period 3).
+_MERGE_PHASE = 0
+_IMPROVE_PHASE = 1
+_COMPARE_PHASE = 2
+_ROUND_CYCLE = 3
+
 
 # ---------------------------------------------------------------------------
 # Token loading
 # ---------------------------------------------------------------------------
 
 
-def load_merge_compare_round_tokens(
+def load_merge_improve_compare_round_tokens(
     rounds_dir: Path,
 ) -> dict[int, dict[int, int]]:
-    """Load per-round total completion tokens from merge-compare JSONL files.
+    """Load per-round total completion tokens from merge-improve-compare JSONL files.
 
     For each task, sums all ``completion_tokens`` from LLM-call records
-    at each ``round_index``, regardless of phase (merge or comparison).
+    at each ``round_index``, regardless of phase (merge, improve, or
+    comparison).
 
     Args:
-        rounds_dir: Directory containing ``Task_{id}_merge_compare.jsonl``
-            files produced by :mod:`merge_compare`.
+        rounds_dir: Directory containing
+            ``Task_{id}_merge_improve_compare.jsonl`` files produced by
+            :mod:`merge_improve_compare`.
 
     Returns:
         Mapping ``{task_id: {round_index: total_completion_tokens}}``.
@@ -116,7 +130,7 @@ def load_merge_compare_round_tokens(
 def _parse_comparison_result(response_text: str) -> int | None:
     """Parse judge response to determine which solution won (1 or 2).
 
-    Mirrors the logic in :func:`merge_compare.parse_comparison_result`.
+    Mirrors the logic in :func:`merge_improve_compare.parse_comparison_result`.
 
     Args:
         response_text: Raw judge response text.
@@ -138,16 +152,16 @@ def _parse_comparison_result(response_text: str) -> int | None:
 def load_comparison_winners(
     rounds_dir: Path,
 ) -> dict[int, dict[int, list[int]]]:
-    """Load comparison round winners from merge-compare JSONL files.
+    """Load comparison round winners from merge-improve-compare JSONL files.
 
     For each comparison-phase LLM call, parses ``response_text`` to
     determine which candidate won (1 → ``candidate_a``, 2 →
     ``candidate_b``).  If the response is unparseable, candidate A wins
-    by default (matching :mod:`merge_compare` behaviour).
+    by default (matching :mod:`merge_improve_compare` behaviour).
 
     Args:
-        rounds_dir: Directory containing ``Task_{id}_merge_compare.jsonl``
-            files.
+        rounds_dir: Directory containing
+            ``Task_{id}_merge_improve_compare.jsonl`` files.
 
     Returns:
         Mapping ``{task_id: {round_index: [winner_original_indices]}}``.
@@ -183,7 +197,7 @@ def load_comparison_winners(
             if choice == _SOLUTION_2:
                 task_winners[round_idx].append(candidate_b)
             else:
-                # Default to candidate A (same as merge_compare.py).
+                # Default to candidate A (same as merge_improve_compare.py).
                 task_winners[round_idx].append(candidate_a)
 
         winners[task_id] = dict(task_winners)
@@ -207,14 +221,14 @@ def compute_cumulative_table(
     averaged across tasks.
 
     Output row 0 uses the total baseline candidate tokens for a task.
-    Output row *r* (*r* >= 1) adds merge-compare round *r - 1* tokens
-    to the previous cumulative total.
+    Output row *r* (*r* >= 1) adds merge-improve-compare round *r - 1*
+    tokens to the previous cumulative total.
 
     Args:
         baseline_tokens: ``{task_id: {candidate_index: tokens}}`` from
             baseline candidate generation.
         round_tokens: ``{task_id: {round_index: total_tokens}}`` from
-            merge-compare rounds.
+            merge-improve-compare rounds.
 
     Returns:
         Sorted list of ``(round_number, avg_total_tokens, n_tasks)``
@@ -231,8 +245,8 @@ def compute_cumulative_table(
         if round_tokens[task_id]:
             max_round_idx = max(max_round_idx, *round_tokens[task_id])
 
-    n_mc_rounds = max_round_idx + 1  # merge-compare rounds (0-indexed)
-    n_output_rounds = n_mc_rounds + 1  # +1 for baseline (row 0)
+    n_mic_rounds = max_round_idx + 1  # merge-improve-compare rounds (0-indexed)
+    n_output_rounds = n_mic_rounds + 1  # +1 for baseline (row 0)
 
     round_sums: list[float] = [0.0] * n_output_rounds
     round_counts: list[int] = [0] * n_output_rounds
@@ -250,7 +264,7 @@ def compute_cumulative_table(
         # Rows 1..N: cumulative total cost for this task.
         cumulative = baseline_total
         task_rt = round_tokens[task_id]
-        for ri in range(n_mc_rounds):
+        for ri in range(n_mic_rounds):
             cumulative += task_rt.get(ri, 0)
             round_sums[ri + 1] += cumulative
             round_counts[ri + 1] += 1
@@ -268,15 +282,18 @@ def compute_cumulative_table(
 # ---------------------------------------------------------------------------
 
 
-def _merge_round_accuracy(
+def _direct_round_accuracy(
     eval_verdicts: dict[int, dict[int, dict[int, bool]]],
-    mc_round: int,
+    mic_round: int,
 ) -> float:
-    """Compute accuracy for a merge round from evaluation verdicts.
+    """Compute accuracy for a merge or improve round from evaluation verdicts.
+
+    Merge and improve rounds have direct evaluation verdicts stored at
+    the corresponding ``round_index``.
 
     Args:
         eval_verdicts: ``{task_id: {candidate_index: {round_index: verdict}}}``.
-        mc_round: Merge-compare round index (even).
+        mic_round: Merge-improve-compare round index (merge or improve).
 
     Returns:
         Fraction of correct verdicts, or ``NaN`` if no verdicts exist.
@@ -286,9 +303,9 @@ def _merge_round_accuracy(
     total_count = 0
     for cand_verdicts in eval_verdicts.values():
         for round_verdicts in cand_verdicts.values():
-            if mc_round in round_verdicts:
+            if mic_round in round_verdicts:
                 total_count += 1
-                if round_verdicts[mc_round]:
+                if round_verdicts[mic_round]:
                     correct_count += 1
     if total_count == 0:
         return float("nan")
@@ -298,32 +315,32 @@ def _merge_round_accuracy(
 def _comparison_round_accuracy(
     eval_verdicts: dict[int, dict[int, dict[int, bool]]],
     comparison_winners: dict[int, dict[int, list[int]]],
-    mc_round: int,
+    mic_round: int,
 ) -> float:
     """Compute accuracy for a comparison round from winner verdicts.
 
     Winners inherit the evaluation verdict of their original candidate
-    from the preceding merge round (``mc_round - 1``).
+    from the preceding improve round (``mic_round - 1``).
 
     Args:
         eval_verdicts: ``{task_id: {candidate_index: {round_index: verdict}}}``.
         comparison_winners: ``{task_id: {round_index: [winner_original_indices]}}``.
-        mc_round: Merge-compare round index (odd).
+        mic_round: Merge-improve-compare round index (comparison phase).
 
     Returns:
         Fraction of correct verdicts, or ``NaN`` if no verdicts exist.
 
     """
-    prev_merge_round = mc_round - 1
+    prev_improve_round = mic_round - 1
     correct_count = 0
     total_count = 0
     for task_id, task_eval in eval_verdicts.items():
-        task_winners = comparison_winners.get(task_id, {}).get(mc_round, [])
+        task_winners = comparison_winners.get(task_id, {}).get(mic_round, [])
         for winner_orig_idx in task_winners:
             winner_round_verdicts = task_eval.get(winner_orig_idx, {})
-            if prev_merge_round in winner_round_verdicts:
+            if prev_improve_round in winner_round_verdicts:
                 total_count += 1
-                if winner_round_verdicts[prev_merge_round]:
+                if winner_round_verdicts[prev_improve_round]:
                     correct_count += 1
     if total_count == 0:
         return float("nan")
@@ -340,19 +357,22 @@ def compute_accuracy_per_round(
 
     Output row 0 uses the pre-computed *baseline_accuracy*.
 
-    For merge rounds (even merge-compare round index): accuracy is the
-    fraction of ``(task, candidate)`` pairs with a correct evaluation
-    verdict at that round index.
+    For merge rounds (``mic_round % 3 == 0``): accuracy is the fraction
+    of ``(task, candidate)`` pairs with a correct evaluation verdict at
+    that round index.
 
-    For comparison rounds (odd merge-compare round index): accuracy is
-    the fraction of comparison winners with a correct evaluation verdict
-    inherited from the preceding merge round.
+    For improve rounds (``mic_round % 3 == 1``): same as merge — direct
+    evaluation verdicts at that round index.
+
+    For comparison rounds (``mic_round % 3 == 2``): accuracy is the
+    fraction of comparison winners with a correct evaluation verdict
+    inherited from the preceding improve round.
 
     Args:
         eval_verdicts: ``{task_id: {candidate_index: {round_index: verdict}}}``
-            loaded from evaluation JSON files (merge-phase only).
+            loaded from evaluation JSON files.
         comparison_winners: ``{task_id: {round_index: [winner_original_indices]}}``
-            loaded from merge-compare JSONL files.
+            loaded from merge-improve-compare JSONL files.
         n_output_rounds: Total number of output rows (including row 0).
         baseline_accuracy: Pre-computed accuracy for row 0 (baseline).
 
@@ -364,13 +384,14 @@ def compute_accuracy_per_round(
     accuracies[0] = baseline_accuracy
 
     for output_round in range(1, n_output_rounds):
-        mc_round = output_round - 1
-        is_merge = mc_round % 2 == 0
+        mic_round = output_round - 1
+        round_type = mic_round % _ROUND_CYCLE
 
-        if is_merge:
-            accuracies[output_round] = _merge_round_accuracy(eval_verdicts, mc_round)
+        if round_type == _COMPARE_PHASE:
+            accuracies[output_round] = _comparison_round_accuracy(eval_verdicts, comparison_winners, mic_round)
         else:
-            accuracies[output_round] = _comparison_round_accuracy(eval_verdicts, comparison_winners, mc_round)
+            # Both merge and improve rounds have direct evaluation verdicts.
+            accuracies[output_round] = _direct_round_accuracy(eval_verdicts, mic_round)
 
     return accuracies
 
@@ -383,9 +404,9 @@ def compute_accuracy_std_per_round(
 ) -> list[float]:
     """Compute std of per-candidate mean accuracy for each output round.
 
-    For merge rounds, candidates are grouped by their ``candidate_index``.
-    For comparison rounds, winners are grouped by their post-comparison
-    position index (0 ... n/2 - 1).
+    For merge and improve rounds, candidates are grouped by their
+    ``candidate_index``.  For comparison rounds, winners are grouped
+    by their post-comparison position index (0 ... n/2 - 1).
 
     For each group, the mean accuracy across tasks is computed; the
     returned value is the population standard deviation of those
@@ -393,9 +414,9 @@ def compute_accuracy_std_per_round(
 
     Args:
         eval_verdicts: ``{task_id: {candidate_index: {round_index: verdict}}}``
-            loaded from evaluation JSON files (merge-phase only).
+            loaded from evaluation JSON files.
         comparison_winners: ``{task_id: {round_index: [winner_original_indices]}}``
-            loaded from merge-compare JSONL files.
+            loaded from merge-improve-compare JSONL files.
         n_output_rounds: Total number of output rows (including row 0).
         baseline_std: Pre-computed std for row 0 (baseline).
 
@@ -408,26 +429,27 @@ def compute_accuracy_std_per_round(
     stds[0] = baseline_std
 
     for output_round in range(1, n_output_rounds):
-        mc_round = output_round - 1
-        is_merge = mc_round % 2 == 0
+        mic_round = output_round - 1
+        round_type = mic_round % _ROUND_CYCLE
 
         cand_task_verdicts: dict[int, list[float]] = defaultdict(list)
 
-        if is_merge:
-            for cand_verdicts in eval_verdicts.values():
-                for cand_idx, round_verdicts in cand_verdicts.items():
-                    if mc_round in round_verdicts:
-                        v = 1.0 if round_verdicts[mc_round] else 0.0
-                        cand_task_verdicts[cand_idx].append(v)
-        else:
-            prev_merge_round = mc_round - 1
+        if round_type == _COMPARE_PHASE:
+            prev_improve_round = mic_round - 1
             for task_id, task_eval in eval_verdicts.items():
-                task_winners = comparison_winners.get(task_id, {}).get(mc_round, [])
+                task_winners = comparison_winners.get(task_id, {}).get(mic_round, [])
                 for new_idx, winner_orig_idx in enumerate(task_winners):
                     winner_round_verdicts = task_eval.get(winner_orig_idx, {})
-                    if prev_merge_round in winner_round_verdicts:
-                        v = 1.0 if winner_round_verdicts[prev_merge_round] else 0.0
+                    if prev_improve_round in winner_round_verdicts:
+                        v = 1.0 if winner_round_verdicts[prev_improve_round] else 0.0
                         cand_task_verdicts[new_idx].append(v)
+        else:
+            # Both merge and improve rounds have direct evaluation verdicts.
+            for cand_verdicts in eval_verdicts.values():
+                for cand_idx, round_verdicts in cand_verdicts.items():
+                    if mic_round in round_verdicts:
+                        v = 1.0 if round_verdicts[mic_round] else 0.0
+                        cand_task_verdicts[cand_idx].append(v)
 
         if cand_task_verdicts:
             cand_means = [sum(vs) / len(vs) for vs in cand_task_verdicts.values()]
@@ -444,13 +466,19 @@ def compute_accuracy_std_per_round(
 def _round_type_label(output_round: int) -> str:
     """Return a human-readable label for the round type.
 
-    Row 0 is ``baseline``.  Subsequent rows alternate between ``merge``
-    (even merge-compare index) and ``compare`` (odd merge-compare index).
+    Row 0 is ``baseline``.  Subsequent rows cycle through ``merge``
+    (``mic_round % 3 == 0``), ``improve`` (``mic_round % 3 == 1``),
+    and ``compare`` (``mic_round % 3 == 2``).
     """
     if output_round == 0:
         return "baseline"
-    mc_round = output_round - 1
-    return "merge" if mc_round % 2 == 0 else "compare"
+    mic_round = output_round - 1
+    round_type = mic_round % _ROUND_CYCLE
+    if round_type == _MERGE_PHASE:
+        return "merge"
+    if round_type == _IMPROVE_PHASE:
+        return "improve"
+    return "compare"
 
 
 def print_table(
@@ -520,10 +548,10 @@ def _resolve_accuracies(
     Args:
         candidates_dir: Baseline candidates directory (may contain
             ``evaluation/`` subfolder).
-        rounds_eval_dir: Directory with merge-phase evaluation files,
+        rounds_eval_dir: Directory with evaluation files,
             or ``None`` if unavailable.
         comparison_winners: ``{task_id: {round_index: [winner_indices]}}``
-            loaded from merge-compare JSONL files.
+            loaded from merge-improve-compare JSONL files.
         n_rounds: Total number of output rows (including row 0).
 
     Returns:
@@ -545,7 +573,7 @@ def _resolve_accuracies(
     accuracies: list[float] | None = None
     accuracy_stds: list[float] | None = None
 
-    # Per-round accuracy and std from merge-compare evaluation.
+    # Per-round accuracy and std from merge-improve-compare evaluation.
     if rounds_eval_dir is not None and rounds_eval_dir.is_dir():
         eval_verdicts = load_evaluation_verdicts(rounds_eval_dir)
         if eval_verdicts:
@@ -588,7 +616,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Count cumulative completion tokens per round "
-            "(baseline + merge-compare) and report the average "
+            "(baseline + merge-improve-compare) and report the average "
             "across tasks and candidates, optionally with per-round "
             "accuracy and std."
         ),
@@ -605,14 +633,18 @@ def parse_args() -> argparse.Namespace:
         "--rounds_dir",
         type=str,
         required=True,
-        help=("Directory with merge-compare JSONL files (e.g. data/ablations/ablation_merge_compare_gpt_oss)."),
+        help=(
+            "Directory with merge-improve-compare JSONL files "
+            "(e.g. data/ablations/"
+            "ablation_merge_improve_compare_gpt_oss)."
+        ),
     )
     parser.add_argument(
         "--eval_dir",
         type=str,
         default=None,
         help=(
-            "Directory with merge-phase evaluation JSON files.  "
+            "Directory with evaluation JSON files.  "
             "Defaults to ``{rounds_dir}/evaluation``.  If the directory "
             "does not exist, accuracy reporting is skipped.  Baseline "
             "(row 0) accuracy is always read from "
@@ -653,7 +685,7 @@ def main() -> None:
 
     # Load data.
     baseline_tokens = load_baseline_tokens(candidates_dir)
-    round_tokens = load_merge_compare_round_tokens(rounds_dir)
+    round_tokens = load_merge_improve_compare_round_tokens(rounds_dir)
     comparison_winners = load_comparison_winners(rounds_dir)
 
     if not baseline_tokens:
@@ -663,7 +695,8 @@ def main() -> None:
         sys.exit(1)
     if not round_tokens:
         print(  # noqa: T201
-            "Error: no merge-compare JSONL files found.", file=sys.stderr
+            "Error: no merge-improve-compare JSONL files found.",
+            file=sys.stderr,
         )
         sys.exit(1)
 

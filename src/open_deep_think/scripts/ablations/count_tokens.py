@@ -1,8 +1,9 @@
 """Count cumulative completion tokens, mean accuracy, and accuracy std per round.
 
 Reads baseline candidate-generation JSONL files (round 0) and self-improvement
-JSONL files (rounds 1..N), computes per-candidate cumulative completion tokens,
-and reports the average across all tasks and candidates for each round.
+JSONL files (rounds 1..N), computes total cumulative completion tokens per task
+(summed across all candidates), and reports the average of these totals across
+tasks for each round.
 
 When an evaluation directory is available inside the candidates directory
 (``candidates_dir/evaluation``), the script reports mean population accuracy
@@ -315,7 +316,11 @@ def compute_cumulative_table(
     baseline_tokens: dict[int, dict[int, int]],
     round_tokens: dict[int, dict[int, dict[int, int]]],
 ) -> list[tuple[int, float, int]]:
-    """Compute average cumulative completion tokens per round.
+    """Compute total cumulative completion tokens per round averaged across tasks.
+
+    For each task the total token cost is summed across all candidates
+    (no per-candidate normalisation).  The per-task totals are then
+    averaged across tasks.
 
     Round 0 uses **all** baseline candidates for common tasks, so that
     the baseline cost is identical regardless of which rounds directory
@@ -329,9 +334,9 @@ def compute_cumulative_table(
             from self-improvement.
 
     Returns:
-        Sorted list of ``(round_number, avg_cumulative_tokens, pair_count)``
-        tuples, where *pair_count* is the number of (task, candidate) pairs
-        used for averaging.
+        Sorted list of ``(round_number, avg_total_tokens, n_tasks)``
+        tuples, where *n_tasks* is the number of tasks used for
+        averaging.
 
     """
     # Find common task IDs.
@@ -357,20 +362,19 @@ def compute_cumulative_table(
         baseline_cands = baseline_tokens[task_id]
         round_cands = round_tokens[task_id]
 
-        # Round 0: use ALL baseline candidates (not filtered by rounds dir).
-        for cand_idx in sorted(baseline_cands):
-            round_sums[0] += baseline_cands[cand_idx]
-            round_counts[0] += 1
+        # Round 0: total baseline tokens for this task (all candidates).
+        task_total_baseline = sum(baseline_cands.values())
+        round_sums[0] += task_total_baseline
+        round_counts[0] += 1
 
-        # Rounds 1..N: only candidates present in both.
+        # Rounds 1..N: cumulative total for this task (common candidates).
         common_cands = sorted(set(baseline_cands) & set(round_cands))
-        for cand_idx in common_cands:
-            cumulative = baseline_cands[cand_idx]
-            cand_rounds = round_cands[cand_idx]
-            for ri in range(n_rounds):
-                cumulative += cand_rounds.get(ri, 0)
-                round_sums[ri + 1] += cumulative
-                round_counts[ri + 1] += 1
+        task_cumulative = sum(baseline_cands[c] for c in common_cands)
+        for ri in range(n_rounds):
+            for cand_idx in common_cands:
+                task_cumulative += round_cands[cand_idx].get(ri, 0)
+            round_sums[ri + 1] += task_cumulative
+            round_counts[ri + 1] += 1
 
     table: list[tuple[int, float, int]] = []
     for r in range(total_output_rounds):
@@ -479,10 +483,10 @@ def print_table(
     accuracies: list[float] | None = None,
     accuracy_stds: list[float] | None = None,
 ) -> None:
-    """Print the round / avg_cumulative_tokens / count / mean_accuracy / std_accuracy table.
+    """Print the round / avg_cumulative_tokens / n_tasks / mean_accuracy / std_accuracy table.
 
     Args:
-        table: List of ``(round_number, avg_cumulative_tokens, pair_count)``
+        table: List of ``(round_number, avg_cumulative_tokens, n_tasks)``
             tuples.
         accuracies: Optional list of mean accuracy values, one per round.
             If ``None``, the accuracy column is omitted.
@@ -492,7 +496,7 @@ def print_table(
     """
     if accuracies is not None:
         has_std = accuracy_stds is not None
-        header = f"{'round':<8}{'avg_cumulative_tokens':>22}{'n_pairs':>10}{'mean_accuracy':>16}"
+        header = f"{'round':<8}{'avg_cumulative_tokens':>22}{'n_tasks':>10}{'mean_accuracy':>16}"
         sep_len = 56
         if has_std:
             header += f"{'std_accuracy':>16}"
@@ -509,7 +513,7 @@ def print_table(
                 line += f"{std_str:>16}"
             print(line)  # noqa: T201
     else:
-        print(f"{'round':<8}{'avg_cumulative_tokens':>22}{'n_pairs':>10}")  # noqa: T201
+        print(f"{'round':<8}{'avg_cumulative_tokens':>22}{'n_tasks':>10}")  # noqa: T201
         print("-" * 40)  # noqa: T201
         for round_num, avg_tokens, count in table:
             print(f"{round_num:<8}{avg_tokens:>22.1f}{count:>10}")  # noqa: T201
@@ -520,8 +524,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Count cumulative completion tokens per round "
-            "(baseline + self-improvement) and report the average "
-            "across tasks and candidates, optionally with per-round accuracy."
+            "(baseline + self-improvement) and report the total sum "
+            "averaged across tasks, optionally with per-round accuracy."
         ),
     )
     parser.add_argument(

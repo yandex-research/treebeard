@@ -1,8 +1,9 @@
 r"""Count cumulative completion tokens and Swiss-tournament accuracy per round.
 
 Reads baseline candidate-generation JSONL files (round 0) and Swiss-tournament
-JSONL files (rounds 1..N), computes per-candidate cumulative completion tokens,
-and reports the average across all tasks and candidates for each round.
+JSONL files (rounds 1..N), computes total cumulative completion tokens per task
+(summed across all candidates), and reports the average of these totals across
+tasks for each round.
 
 Accuracy is computed using Swiss tournament standings and baseline candidate
 evaluations.  For round 0, the mean population accuracy is reported (across
@@ -274,17 +275,17 @@ def print_table(
     table: list[tuple[int, float, int]],
     accuracies: list[float] | None = None,
 ) -> None:
-    """Print the round / avg_cumulative_tokens / count / mean_accuracy table.
+    """Print the round / avg_cumulative_tokens / n_tasks / mean_accuracy table.
 
     Args:
-        table: List of ``(round_number, avg_cumulative_tokens, pair_count)``
+        table: List of ``(round_number, avg_cumulative_tokens, n_tasks)``
             tuples.
         accuracies: Optional list of mean accuracy values, one per round.
             If ``None``, the accuracy column is omitted.
 
     """
     if accuracies is not None:
-        header = f"{'round':<8}{'avg_cumulative_tokens':>22}{'n_pairs':>10}{'mean_accuracy':>16}"
+        header = f"{'round':<8}{'avg_cumulative_tokens':>22}{'n_tasks':>10}{'mean_accuracy':>16}"
         print(header)  # noqa: T201
         print("-" * 56)  # noqa: T201
         for i, (round_num, avg_tokens, count) in enumerate(table):
@@ -293,7 +294,7 @@ def print_table(
             line = f"{round_num:<8}{avg_tokens:>22.1f}{count:>10}{acc_str:>16}"
             print(line)  # noqa: T201
     else:
-        print(f"{'round':<8}{'avg_cumulative_tokens':>22}{'n_pairs':>10}")  # noqa: T201
+        print(f"{'round':<8}{'avg_cumulative_tokens':>22}{'n_tasks':>10}")  # noqa: T201
         print("-" * 40)  # noqa: T201
         for round_num, avg_tokens, count in table:
             print(f"{round_num:<8}{avg_tokens:>22.1f}{count:>10}")  # noqa: T201
@@ -309,8 +310,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Count cumulative completion tokens per round "
-            "(baseline + Swiss tournament) and report the average "
-            "across tasks and candidates, with per-round accuracy "
+            "(baseline + Swiss tournament) and report the total sum "
+            "averaged across tasks, with per-round accuracy "
             "derived from Swiss tournament standings."
         ),
     )
